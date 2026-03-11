@@ -140,8 +140,35 @@ init_state()
 # =========================
 # UTILS
 # =========================
+def _get_companies_from_secrets() -> pd.DataFrame:
+    try:
+        if "companies" not in st.secrets:
+            return pd.DataFrame()
+
+        companies_section = st.secrets["companies"]
+        rows = []
+        columns = ["company", "api", "advertising_api", "storage", "content", "remaining_goods", "regions"]
+
+        for company_name, company_cfg in companies_section.items():
+            row = {"company": str(company_name).strip()}
+            for col in columns[1:]:
+                row[col] = str(company_cfg[col]).strip() if col in company_cfg and company_cfg[col] is not None else ""
+            rows.append(row)
+
+        if not rows:
+            return pd.DataFrame()
+
+        return pd.DataFrame(rows, columns=columns)
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_data
 def get_companies():
+    df_secrets = _get_companies_from_secrets()
+    if not df_secrets.empty:
+        return df_secrets
+
     try:
         df = pd.read_excel(API_FILE)
         return df
