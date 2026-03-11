@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# API keys
+data_api/
+
+# local data
+data/
+
+# cache
+reports/
+
+# secrets
+.streamlit/secrets.toml
+
+# files
+*.xlsx
+*.parquet
+*.json
