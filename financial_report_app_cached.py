@@ -19,7 +19,7 @@ CACHE_ADS_DIR = os.path.join(CACHE_DIR, "ads")
 CACHE_STORAGE_DIR = os.path.join(CACHE_DIR, "storage")
 CACHE_STOCKS_DIR = os.path.join(CACHE_DIR, "stocks")
 CACHE_REGIONS_DIR = os.path.join(CACHE_DIR, "regions")
-PRICE_SAVE_PATH = r"C:\Streamlit_Projects\data"
+PRICE_SAVE_PATH = "data"
 NOMENCLATURE_DIR = r"C:\Streamlit_Projects\data"  # nomenclature_<company>.parquet
 PRICE_PARQUET_PATH = os.path.join(PRICE_SAVE_PATH, "price_list.parquet")
 
