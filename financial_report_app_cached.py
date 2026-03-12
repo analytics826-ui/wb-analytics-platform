@@ -353,12 +353,6 @@ def _build_missing_cost_mask_local(cost_series: pd.Series) -> pd.Series:
 
 
 def get_missing_cost_barcodes(df_fin: pd.DataFrame, df_price: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ищет баркоды, которые:
-    - реально участвовали бы в расчете себестоимости
-      (операция = Продажа или Возврат)
-    - но в price_list.parquet имеют пустую себестоимость
-    """
     if df_fin is None or df_fin.empty or df_price is None or df_price.empty:
         return pd.DataFrame(columns=["Баркод"])
 
@@ -421,13 +415,6 @@ def get_missing_cost_barcodes(df_fin: pd.DataFrame, df_price: pd.DataFrame) -> p
 
 
 def get_missing_cost_stocks_barcodes(df_stocks: pd.DataFrame, df_price: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ищет баркоды, которые:
-    - есть в остатках
-    - quantity > 0
-    - но в price_list.parquet имеют пустую себестоимость
-    Возвращает только один столбец: Баркод
-    """
     if df_stocks is None or df_stocks.empty:
         return pd.DataFrame(columns=["Баркод"])
 
@@ -518,17 +505,6 @@ def get_missing_cost_stocks_barcodes(df_stocks: pd.DataFrame, df_price: pd.DataF
 
 
 def create_stocks_by_warehouse_report(df_stocks: pd.DataFrame, df_nom: pd.DataFrame) -> pd.DataFrame:
-    """
-    Строит отдельную таблицу:
-    строки = Категория
-    столбцы = реальные склады + Остальные
-    справа:
-    - Итого FBO
-    - В пути до получателей
-    - В пути возвраты на склад WB
-
-    Все показатели только в штуках.
-    """
     if df_stocks is None or df_stocks.empty:
         return pd.DataFrame()
 
@@ -666,9 +642,6 @@ def create_stocks_by_warehouse_report(df_stocks: pd.DataFrame, df_nom: pd.DataFr
     return base
 
 
-# =========================
-# FIN REPORT
-# =========================
 def fetch_financial_report(api_key, company_name, date_from, date_to):
     cache_path = build_cache_file_path("fin", company_name, date_from, date_to)
     cached_data = load_from_cache(cache_path)
@@ -746,9 +719,6 @@ def fetch_financial_report(api_key, company_name, date_from, date_to):
         return None, f"Ошибка соединения: {e}"
 
 
-# =========================
-# ADS REPORT
-# =========================
 def fetch_advertising_report(api_key, company_name, date_from, date_to):
     cache_path = build_cache_file_path("ads", company_name, date_from, date_to)
     cached_data = load_from_cache(cache_path)
@@ -795,9 +765,6 @@ def add_article_column_from_campname(df_ads: pd.DataFrame) -> pd.DataFrame:
     return df_ads
 
 
-# =========================
-# NOMENCLATURE
-# =========================
 def load_nomenclature_for_company(company_name: str) -> pd.DataFrame:
     parquet_path, _ = get_nomenclature_paths(company_name)
     if not os.path.exists(parquet_path):
@@ -809,13 +776,6 @@ def load_nomenclature_for_company(company_name: str) -> pd.DataFrame:
 
 
 def fetch_nomenclature_from_wb(content_token: str, company_name: str):
-    """
-    Скачивает номенклатуру WB по API content.
-    Сохраняет:
-    - nomenclature_<company>.parquet
-    - nomenclature_<company>_preview.xlsx
-    """
-
     if not content_token or str(content_token).strip() == "" or str(content_token).lower() == "nan":
         return pd.DataFrame(), "⚠ Номенклатура: content API ключ не указан в data_api.xlsx"
 
@@ -917,12 +877,6 @@ def fetch_nomenclature_from_wb(content_token: str, company_name: str):
 
 
 def ensure_nomenclature_for_company(company_name: str, content_token: str):
-    """
-    Логика:
-    - если файла нет -> скачать
-    - если файл старше NOMENCLATURE_REFRESH_DAYS -> обновить
-    - иначе просто загрузить локально
-    """
     parquet_path, _ = get_nomenclature_paths(company_name)
 
     need_refresh = False
@@ -951,9 +905,6 @@ def ensure_nomenclature_for_company(company_name: str, content_token: str):
     return pd.DataFrame(), "⚠ Номенклатура: файл есть, но не удалось его прочитать."
 
 
-# =========================
-# PAID STORAGE REPORT (ASYNC)
-# =========================
 def fetch_paid_storage_report(storage_token: str, company_name: str, date_from, date_to):
     delta_days = (date_to - date_from).days + 1
     if delta_days > 8:
@@ -1014,7 +965,7 @@ def fetch_paid_storage_report(storage_token: str, company_name: str, date_from, 
             save_raw_json("STORAGE", company_name, data)
             return [], "ℹ Платное хранение: нет данных за выбранный период."
         if dr.status_code != 200:
-            return None, f"Ошибка API хранения (download) {dr.status_code}: {dr.text}"
+            return None, f"Ошибка API хранения (download) {dr.text}"
 
         data = dr.json()
         if not isinstance(data, list):
@@ -1030,14 +981,7 @@ def fetch_paid_storage_report(storage_token: str, company_name: str, date_from, 
         return None, f"Ошибка соединения (хранение): {e}"
 
 
-# =========================
-# WAREHOUSE REMAINS REPORT (ASYNC)
-# =========================
 def normalize_warehouse_remains_data(data) -> pd.DataFrame:
-    """
-    Преобразует отчет остатков в плоский DataFrame:
-    одна строка = товар + склад
-    """
     if data is None:
         return pd.DataFrame()
 
@@ -1109,13 +1053,6 @@ def normalize_warehouse_remains_data(data) -> pd.DataFrame:
 
 
 def fetch_warehouse_remains_report(remaining_goods_token: str, company_name: str):
-    """
-    Отчет об остатках на складах WB.
-    Асинхронная схема:
-    1) generate
-    2) status
-    3) download
-    """
     if not remaining_goods_token or str(remaining_goods_token).strip() == "" or str(remaining_goods_token).lower() == "nan":
         return None, "ℹ Остатки на складах: токен remaining_goods не указан в data_api.xlsx"
 
@@ -1204,9 +1141,6 @@ def fetch_warehouse_remains_report(remaining_goods_token: str, company_name: str
         return None, f"Ошибка соединения (остатки): {e}"
 
 
-# =========================
-# RUN LOAD
-# =========================
 def extract_region_sales_rows(payload):
     if payload is None:
         return []
@@ -1248,15 +1182,8 @@ def normalize_region_sales_df(rows) -> pd.DataFrame:
             df[column] = df[column].fillna("Не указано").astype(str).str.strip().replace({"": "Не указано"})
 
     preferred_order = [
-        "countryName",
-        "foName",
-        "regionName",
-        "cityName",
-        "nmID",
-        "sa",
-        "saleItemInvoiceQty",
-        "saleInvoiceCostPrice",
-        "saleInvoiceCostPricePerc",
+        "countryName", "foName", "regionName", "cityName", "nmID", "sa",
+        "saleItemInvoiceQty", "saleInvoiceCostPrice", "saleInvoiceCostPricePerc",
     ]
     ordered_columns = [col for col in preferred_order if col in df.columns]
     remaining_columns = [col for col in df.columns if col not in ordered_columns]
@@ -1328,10 +1255,7 @@ def build_region_sales_geo_report(df_region_sales: pd.DataFrame) -> pd.DataFrame
 
     geo = (
         df.groupby(["countryName", "foName", "regionName", "cityName"], dropna=False, as_index=False)
-        .agg({
-            "saleItemInvoiceQty": "sum",
-            "saleInvoiceCostPrice": "sum",
-        })
+        .agg({"saleItemInvoiceQty": "sum", "saleInvoiceCostPrice": "sum"})
     )
 
     total_sales = pd.to_numeric(geo["saleInvoiceCostPrice"], errors="coerce").fillna(0).sum()
@@ -1352,8 +1276,6 @@ def build_region_sales_geo_report(df_region_sales: pd.DataFrame) -> pd.DataFrame
 
     geo = geo.sort_values(["Страна", "Федеральный округ", "Регион", "Город"], kind="stable").reset_index(drop=True)
     return geo
-
-
 
 
 def enrich_region_sales_with_category(df_region_sales: pd.DataFrame, df_nom: pd.DataFrame) -> pd.DataFrame:
@@ -1395,24 +1317,13 @@ def enrich_region_sales_with_category(df_region_sales: pd.DataFrame, df_nom: pd.
     df = df.drop(columns=["_nm_id_norm"], errors="ignore")
     return df
 
-def run_load(
-    company_name: str,
-    api_fin: str,
-    api_ads: str,
-    api_storage: str,
-    content_api: str,
-    remaining_goods_api: str,
-    regions_api: str,
-    date_from,
-    date_to
-):
+
+def run_load(company_name: str, api_fin: str, api_ads: str, api_storage: str, content_api: str, remaining_goods_api: str, regions_api: str, date_from, date_to):
     clear_loaded_data()
 
-    # 1) Номенклатура: сначала проверяем/обновляем
     df_nom, msg_nom = ensure_nomenclature_for_company(company_name, content_api)
     st.session_state.status_msg_nom = msg_nom
 
-    # 2) Основные отчеты
     report_data, msg_fin = fetch_financial_report(api_fin, company_name, date_from, date_to)
     st.session_state.status_msg_fin = msg_fin
 
@@ -1547,8 +1458,6 @@ def run_load(
     st.session_state.ts_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-
-
 def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
     if df_analysis is None or df_analysis.empty:
         return pd.DataFrame()
@@ -1562,6 +1471,7 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
         "Прибыль",
         "Рентабельность",
         "Реклама",
+        "Хранение",
         "Отзывы за баллы",
         "ДРР",
         "Остаток FBO, штук",
@@ -1580,6 +1490,7 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
         "Прибыль",
         "Рентабельность",
         "Реклама",
+        "Хранение",
         "Отзывы за баллы",
         "ДРР",
         "Остаток FBO, штук",
@@ -1614,9 +1525,6 @@ def format_metric_percent(value, decimals: int = 1) -> str:
     return f"{value:.{decimals}f}%"
 
 
-# =========================
-# UI
-# =========================
 st.sidebar.title("Меню управления")
 choice = st.sidebar.radio("Переключить вкладку:", ["📊 Отчеты", "📥 Загрузить Прайс"])
 
@@ -1711,58 +1619,6 @@ else:
                     date_to
                 )
 
-    if st.session_state.status_msg_nom:
-        msg = st.session_state.status_msg_nom
-        if msg.startswith("✅") or msg.startswith("ℹ"):
-            st.sidebar.info(msg)
-        elif msg.startswith("⚠"):
-            st.sidebar.warning(msg)
-        else:
-            st.sidebar.info(msg)
-
-    if st.session_state.status_msg_fin:
-        st.sidebar.info(st.session_state.status_msg_fin)
-
-    if st.session_state.status_msg_ads:
-        msg = st.session_state.status_msg_ads
-        if msg.startswith("✅") or msg.startswith("⚡"):
-            st.sidebar.info(msg)
-        else:
-            st.sidebar.warning(msg)
-
-    if st.session_state.status_msg_storage:
-        msg = st.session_state.status_msg_storage
-        if msg.startswith("✅") or msg.startswith("ℹ") or msg.startswith("⚡"):
-            st.sidebar.info(msg)
-        elif msg.startswith("⚠"):
-            st.sidebar.warning(msg)
-        elif msg.startswith("❌"):
-            st.sidebar.error(msg)
-        else:
-            st.sidebar.info(msg)
-
-    if st.session_state.status_msg_stocks:
-        msg = st.session_state.status_msg_stocks
-        if msg.startswith("✅") or msg.startswith("ℹ") or msg.startswith("⚡"):
-            st.sidebar.info(msg)
-        elif msg.startswith("⚠"):
-            st.sidebar.warning(msg)
-        elif msg.startswith("❌"):
-            st.sidebar.error(msg)
-        else:
-            st.sidebar.info(msg)
-
-    if st.session_state.status_msg_regions:
-        msg = st.session_state.status_msg_regions
-        if msg.startswith("✅") or msg.startswith("ℹ") or msg.startswith("⚡"):
-            st.sidebar.info(msg)
-        elif msg.startswith("⚠"):
-            st.sidebar.warning(msg)
-        elif msg.startswith("❌"):
-            st.sidebar.error(msg)
-        else:
-            st.sidebar.info(msg)
-
     if st.session_state.loaded and isinstance(st.session_state.df_fin, pd.DataFrame) and not st.session_state.df_fin.empty:
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📌 Сводная по продажам",
@@ -1771,316 +1627,6 @@ else:
             "🌍 География продаж",
             "📋 Исходный отчет"
         ])
-
-        with tab5:
-            st.write(f"### 📋 Полные данные: {target_company}")
-            st.dataframe(st.session_state.df_fin, use_container_width=True)
-
-            if st.session_state.excel_fin_raw:
-                st.download_button(
-                    label="📥 Скачать исходный Excel",
-                    data=st.session_state.excel_fin_raw,
-                    file_name=f"WB_Raw_{target_company}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    key="dl_fin_raw"
-                )
-
-            if isinstance(st.session_state.df_ads, pd.DataFrame) and not st.session_state.df_ads.empty:
-                st.write("### 📣 История затрат на рекламу (исходные данные)")
-                st.dataframe(st.session_state.df_ads, use_container_width=True)
-
-                if st.session_state.excel_ads_raw:
-                    st.download_button(
-                        label="📥 Скачать исходный файл по рекламе",
-                        data=st.session_state.excel_ads_raw,
-                        file_name=f"WB_Ads_{target_company}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        key="dl_ads_raw"
-                    )
-
-            if isinstance(st.session_state.df_storage, pd.DataFrame) and not st.session_state.df_storage.empty:
-                st.write("### 🧊 Платное хранение (исходные данные)")
-                st.dataframe(st.session_state.df_storage, use_container_width=True)
-
-                if st.session_state.excel_storage_raw:
-                    st.download_button(
-                        label="📥 Скачать исходный файл по хранению",
-                        data=st.session_state.excel_storage_raw,
-                        file_name=f"WB_Storage_{target_company}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        key="dl_storage_raw"
-                    )
-            else:
-                if has_storage_col and storage_api and str(storage_api).strip() and str(storage_api).lower() != "nan":
-                    st.info("Платное хранение: данных нет (или период > 8 дней).")
-
-            if isinstance(st.session_state.df_stocks, pd.DataFrame) and not st.session_state.df_stocks.empty:
-                st.write("### 📦 Остатки на складах (исходные данные)")
-                st.dataframe(st.session_state.df_stocks, use_container_width=True)
-
-                if st.session_state.excel_stocks_raw:
-                    st.download_button(
-                        label="📥 Скачать исходный файл по остаткам",
-                        data=st.session_state.excel_stocks_raw,
-                        file_name=f"WB_Stocks_{target_company}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        key="dl_stocks_raw"
-                    )
-            else:
-                if has_remaining_goods_col and remaining_goods_api and str(remaining_goods_api).strip() and str(remaining_goods_api).lower() != "nan":
-                    st.info("Остатки на складах: данных нет.")
-
-        with tab2:
-            st.write("### 📈 Итоговые показатели по категориям")
-
-            if isinstance(st.session_state.df_missing_cost_barcodes, pd.DataFrame) and not st.session_state.df_missing_cost_barcodes.empty:
-                st.warning("Нет цены на товар")
-                if st.session_state.excel_missing_cost_barcodes:
-                    st.download_button(
-                        label="📥 Скачать Excel с баркодами без цены",
-                        data=st.session_state.excel_missing_cost_barcodes,
-                        file_name=f"WB_Missing_Cost_Barcodes_{target_company}.xlsx",
-                        key="dl_missing_cost_barcodes"
-                    )
-
-            if isinstance(st.session_state.df_missing_cost_stocks, pd.DataFrame) and not st.session_state.df_missing_cost_stocks.empty:
-                st.warning("Есть остатки товаров без себестоимости")
-                if st.session_state.excel_missing_cost_stocks:
-                    st.download_button(
-                        label="📥 Скачать Excel с баркодами остатков без себестоимости",
-                        data=st.session_state.excel_missing_cost_stocks,
-                        file_name=f"WB_Missing_Cost_Stocks_Barcodes_{target_company}.xlsx",
-                        key="dl_missing_cost_stocks"
-                    )
-
-            if isinstance(st.session_state.df_analysis, pd.DataFrame) and not st.session_state.df_analysis.empty:
-                df_all = st.session_state.df_analysis.copy()
-
-                if "Категория" in df_all.columns:
-                    df_total = df_all[df_all["Категория"].astype(str).str.strip() == "Итого"].copy()
-                    df_main = df_all[df_all["Категория"].astype(str).str.strip() != "Итого"].copy()
-                else:
-                    df_total = pd.DataFrame()
-                    df_main = df_all
-
-                st.dataframe(df_main, use_container_width=True, height=560)
-
-                if not df_total.empty:
-                    df_total = df_total.tail(1).copy()
-
-                    def _style_total_row(_row):
-                        return [
-                            "color:#b30000; font-weight:700; background-color:#ffe6e6; "
-                            "border-top:3px solid #b30000"
-                        ] * len(_row)
-
-                    styled_total = (
-                        df_total.style
-                        .apply(_style_total_row, axis=1)
-                        .format(precision=2)
-                    )
-
-                    st.markdown("**Итого (закреплено снизу):**")
-                    st.dataframe(styled_total, use_container_width=True, height=90)
-
-                if st.session_state.excel_analysis:
-                    st.download_button(
-                        label="📥 Скачать аналитический отчет",
-                        data=st.session_state.excel_analysis,
-                        file_name=f"WB_Analysis_{target_company}.xlsx",
-                        key="dl_analysis"
-                    )
-            else:
-                st.warning("Нет данных для аналитики. Проверь отчеты и/или номенклатуру.")
-
-        with tab3:
-            st.write("### 📦 Остатки по складам (штук)")
-
-            if isinstance(st.session_state.df_stocks_by_warehouse, pd.DataFrame) and not st.session_state.df_stocks_by_warehouse.empty:
-                df_sw_all = st.session_state.df_stocks_by_warehouse.copy()
-
-                if "Категория" in df_sw_all.columns:
-                    df_sw_total = df_sw_all[df_sw_all["Категория"].astype(str).str.strip() == "Итого"].copy()
-                    df_sw_main = df_sw_all[df_sw_all["Категория"].astype(str).str.strip() != "Итого"].copy()
-                else:
-                    df_sw_total = pd.DataFrame()
-                    df_sw_main = df_sw_all
-
-                st.dataframe(df_sw_main, use_container_width=True, height=560)
-
-                if not df_sw_total.empty:
-                    df_sw_total = df_sw_total.tail(1).copy()
-
-                    def _style_total_row_stocks(_row):
-                        return [
-                            "color:#b30000; font-weight:700; background-color:#ffe6e6; "
-                            "border-top:3px solid #b30000"
-                        ] * len(_row)
-
-                    styled_sw_total = (
-                        df_sw_total.style
-                        .apply(_style_total_row_stocks, axis=1)
-                        .format(precision=0)
-                    )
-
-                    st.markdown("**Итого по складам (закреплено снизу):**")
-                    st.dataframe(styled_sw_total, use_container_width=True, height=90)
-
-                if st.session_state.excel_stocks_by_warehouse:
-                    st.download_button(
-                        label="📥 Скачать остатки по складам",
-                        data=st.session_state.excel_stocks_by_warehouse,
-                        file_name=f"WB_Stocks_By_Warehouse_{target_company}.xlsx",
-                        key="dl_stocks_by_warehouse"
-                    )
-            else:
-                st.warning("Нет данных для отчета по складам. Сначала загрузите отчет остатков.")
-
-        with tab4:
-            st.write("### 🌍 География продаж")
-
-            if isinstance(st.session_state.df_region_sales, pd.DataFrame) and not st.session_state.df_region_sales.empty:
-                df_region_sales_enriched = enrich_region_sales_with_category(
-                    st.session_state.df_region_sales,
-                    st.session_state.df_nom
-                )
-
-                category_options = ["Все категории"]
-                if "Категория" in df_region_sales_enriched.columns:
-                    category_values = (
-                        df_region_sales_enriched["Категория"]
-                        .fillna("Не найдено")
-                        .astype(str)
-                        .str.strip()
-                        .replace({"": "Не найдено"})
-                        .unique()
-                        .tolist()
-                    )
-                    category_options += sorted(category_values)
-
-                selected_category = st.selectbox(
-                    "Категория",
-                    category_options,
-                    key="geo_sales_category"
-                )
-
-                filtered_region_sales = df_region_sales_enriched.copy()
-                if selected_category != "Все категории":
-                    filtered_region_sales = filtered_region_sales[
-                        filtered_region_sales["Категория"].astype(str) == selected_category
-                    ].copy()
-
-                df_geo = build_region_sales_geo_report(filtered_region_sales)
-
-                if not df_geo.empty:
-                    detail_level = st.radio(
-                        "Уровень детализации",
-                        ["Федеральный округ", "Регион", "Город"],
-                        horizontal=True,
-                        key="geo_sales_detail_level"
-                    )
-
-                    sort_metric = st.radio(
-                        "Сортировать по",
-                        ["Продажи, шт", "Выручка, ₽"],
-                        horizontal=True,
-                        key="geo_sales_sort_metric"
-                    )
-
-                    filtered_geo = df_geo.copy()
-
-                    if detail_level in ["Регион", "Город"]:
-                        fo_options = ["Все"] + sorted(filtered_geo["Федеральный округ"].dropna().astype(str).unique().tolist())
-                        selected_fo = st.selectbox("Федеральный округ", fo_options, key="geo_sales_fo")
-                        if selected_fo != "Все":
-                            filtered_geo = filtered_geo[filtered_geo["Федеральный округ"].astype(str) == selected_fo].copy()
-
-                    if detail_level == "Город":
-                        region_options = ["Все"] + sorted(filtered_geo["Регион"].dropna().astype(str).unique().tolist())
-                        selected_region = st.selectbox("Регион", region_options, key="geo_sales_region")
-                        if selected_region != "Все":
-                            filtered_geo = filtered_geo[filtered_geo["Регион"].astype(str) == selected_region].copy()
-
-                    if detail_level == "Федеральный округ":
-                        group_cols = ["Страна", "Федеральный округ"]
-                    elif detail_level == "Регион":
-                        group_cols = ["Страна", "Федеральный округ", "Регион"]
-                    else:
-                        group_cols = ["Страна", "Федеральный округ", "Регион", "Город"]
-
-                    df_geo_view = (
-                        filtered_geo.groupby(group_cols, dropna=False, as_index=False)
-                        .agg({
-                            "Продажи, шт": "sum",
-                            "Выручка, ₽": "sum",
-                        })
-                    )
-
-                    total_geo_sales = pd.to_numeric(df_geo_view["Выручка, ₽"], errors="coerce").fillna(0).sum()
-                    if total_geo_sales != 0:
-                        df_geo_view["Доля выручки, %"] = (df_geo_view["Выручка, ₽"] / total_geo_sales * 100).round(2)
-                    else:
-                        df_geo_view["Доля выручки, %"] = 0.0
-
-                    second_sort_metric = "Выручка, ₽" if sort_metric == "Продажи, шт" else "Продажи, шт"
-                    df_geo_view = df_geo_view.sort_values(
-                        [sort_metric, second_sort_metric],
-                        ascending=[False, False],
-                        kind="stable"
-                    ).reset_index(drop=True)
-
-                    st.dataframe(df_geo_view, use_container_width=True, height=560)
-
-                    st.markdown("### 🏆 ТОП-10 регионов")
-                    df_top_regions = (
-                        filtered_geo.groupby(["Регион"], dropna=False, as_index=False)
-                        .agg({
-                            "Продажи, шт": "sum",
-                            "Выручка, ₽": "sum",
-                        })
-                    )
-                    total_top_regions_sales = pd.to_numeric(df_top_regions["Выручка, ₽"], errors="coerce").fillna(0).sum()
-                    if total_top_regions_sales != 0:
-                        df_top_regions["Доля выручки, %"] = (df_top_regions["Выручка, ₽"] / total_top_regions_sales * 100).round(2)
-                    else:
-                        df_top_regions["Доля выручки, %"] = 0.0
-                    df_top_regions = (
-                        df_top_regions.sort_values([sort_metric, second_sort_metric], ascending=[False, False], kind="stable")
-                        .head(10)
-                        .reset_index(drop=True)
-                    )
-                    st.dataframe(df_top_regions, use_container_width=True, height=390)
-
-                    st.markdown("### 🏙 ТОП-10 городов")
-                    df_top_cities = (
-                        filtered_geo.groupby(["Город"], dropna=False, as_index=False)
-                        .agg({
-                            "Продажи, шт": "sum",
-                            "Выручка, ₽": "sum",
-                        })
-                    )
-                    total_top_cities_sales = pd.to_numeric(df_top_cities["Выручка, ₽"], errors="coerce").fillna(0).sum()
-                    if total_top_cities_sales != 0:
-                        df_top_cities["Доля выручки, %"] = (df_top_cities["Выручка, ₽"] / total_top_cities_sales * 100).round(2)
-                    else:
-                        df_top_cities["Доля выручки, %"] = 0.0
-                    df_top_cities = (
-                        df_top_cities.sort_values([sort_metric, second_sort_metric], ascending=[False, False], kind="stable")
-                        .head(10)
-                        .reset_index(drop=True)
-                    )
-                    st.dataframe(df_top_cities, use_container_width=True, height=390)
-
-                    with st.expander("Показать исходные строки отчета «Продажи по регионам»"):
-                        st.dataframe(filtered_region_sales, use_container_width=True, height=420)
-
-                    if st.session_state.excel_region_sales:
-                        st.download_button(
-                            label="📥 Скачать исходный отчет по географии продаж",
-                            data=st.session_state.excel_region_sales,
-                            file_name=f"WB_Region_Sales_{target_company}.xlsx",
-                            key="dl_region_sales"
-                        )
-                else:
-                    st.warning("По выбранной категории нет данных в отчете «Продажи по регионам».")
-            else:
-                st.warning("Нет данных для отчета «Продажи по регионам». Проверь токен regions и выбранный период.")
 
         with tab1:
             st.write("### 📌 Сводная по продажам")
@@ -2125,6 +1671,7 @@ else:
                         profit_total = pd.to_numeric(df_summary_view.get("Прибыль", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         cost_total = pd.to_numeric(df_summary_view.get("Себестоимость", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         ads_total = pd.to_numeric(df_summary_view.get("Реклама", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+                        storage_total = pd.to_numeric(df_summary_view.get("Хранение", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         fbo_total = pd.to_numeric(df_summary_view.get("Остаток FBO, рублей", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         profitability_total = round((profit_total / cost_total) * 100, 1) if cost_total != 0 else 0.0
                         metric_row = {
@@ -2132,12 +1679,13 @@ else:
                             "Прибыль": profit_total,
                             "Себестоимость": cost_total,
                             "Реклама": ads_total,
+                            "Хранение": storage_total,
                             "Рентабельность": profitability_total,
                             "Остаток FBO, рублей": fbo_total,
                         }
 
                     if metric_row is not None:
-                        col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6 = st.columns(6)
+                        col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6, col_kpi_7 = st.columns(7)
                         with col_kpi_1:
                             st.metric("Продаж штук", format_metric_int(metric_row.get("Продаж штук", 0)))
                         with col_kpi_2:
@@ -2147,8 +1695,10 @@ else:
                         with col_kpi_4:
                             st.metric("Реклама", format_metric_money(metric_row.get("Реклама", 0), decimals=2))
                         with col_kpi_5:
-                            st.metric("Рентабельность", format_metric_percent(metric_row.get("Рентабельность", 0), decimals=1))
+                            st.metric("Хранение", format_metric_money(metric_row.get("Хранение", 0), decimals=2))
                         with col_kpi_6:
+                            st.metric("Рентабельность", format_metric_percent(metric_row.get("Рентабельность", 0), decimals=1))
+                        with col_kpi_7:
                             st.metric("Остаток FBO, ₽", format_metric_money(metric_row.get("Остаток FBO, рублей", 0), decimals=2))
 
                     format_map_main = {}
@@ -2160,56 +1710,14 @@ else:
                         format_map_main["Рентабельность"] = "{:.1f}"
                     if "ДРР" in df_summary_view.columns:
                         format_map_main["ДРР"] = "{:.1f}"
+                    if "Хранение" in df_summary_view.columns:
+                        format_map_main["Хранение"] = "{:.2f}"
 
                     if not df_summary_view.empty:
                         styled_summary_main = df_summary_view.style.format(format_map_main)
                         st.dataframe(styled_summary_main, use_container_width=True, height=560)
                     else:
                         st.info("По выбранной категории нет данных в сводной по продажам.")
-
-                    if selected_summary_category == "Все категории" and not df_summary_total.empty:
-                        df_summary_total = df_summary_total.tail(1).copy()
-                        if "Прибыль" in df_summary_total.columns and "Себестоимость" in df_summary_total.columns:
-                            total_profit = pd.to_numeric(df_summary_total["Прибыль"], errors="coerce").fillna(0.0)
-                            total_cost = pd.to_numeric(df_summary_total["Себестоимость"], errors="coerce").fillna(0.0)
-                            df_summary_total["Рентабельность"] = 0.0
-                            total_non_zero_mask = total_cost != 0
-                            df_summary_total.loc[total_non_zero_mask, "Рентабельность"] = ((total_profit[total_non_zero_mask] / total_cost[total_non_zero_mask]) * 100).round(1)
-
-                        def _style_total_row_summary(_row):
-                            return [
-                                "color:#b30000; font-weight:700; background-color:#ffe6e6; "
-                                "border-top:3px solid #b30000"
-                            ] * len(_row)
-
-                        format_map_total = {}
-                        if "Себестоимость" in df_summary_total.columns:
-                            format_map_total["Себестоимость"] = "{:.2f}"
-                        if "Прибыль" in df_summary_total.columns:
-                            format_map_total["Прибыль"] = "{:.2f}"
-                        if "Рентабельность" in df_summary_total.columns:
-                            format_map_total["Рентабельность"] = "{:.1f}"
-                        if "ДРР" in df_summary_total.columns:
-                            format_map_total["ДРР"] = "{:.1f}"
-
-                        styled_summary_total = (
-                            df_summary_total.style
-                            .apply(_style_total_row_summary, axis=1)
-                            .format(format_map_total)
-                        )
-
-                        st.markdown("**Итого (закреплено снизу):**")
-                        st.dataframe(styled_summary_total, use_container_width=True, height=90)
-
-                    excel_summary = to_excel(df_summary_view, sheet_name="Sales_Summary") if not df_summary_view.empty else None
-                    if excel_summary:
-                        suffix = "all" if selected_summary_category == "Все категории" else sanitize_filename(selected_summary_category)
-                        st.download_button(
-                            label="📥 Скачать сводную по продажам",
-                            data=excel_summary,
-                            file_name=f"WB_Sales_Summary_{target_company}_{suffix}.xlsx",
-                            key="dl_sales_summary"
-                        )
                 else:
                     st.warning("Не удалось сформировать сводную по продажам из аналитики.")
             else:
