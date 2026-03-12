@@ -20,7 +20,7 @@ CACHE_STORAGE_DIR = os.path.join(CACHE_DIR, "storage")
 CACHE_STOCKS_DIR = os.path.join(CACHE_DIR, "stocks")
 CACHE_REGIONS_DIR = os.path.join(CACHE_DIR, "regions")
 PRICE_SAVE_PATH = "data"
-NOMENCLATURE_DIR = r"C:\Streamlit_Projects\data"  # nomenclature_<company>.parquet
+NOMENCLATURE_DIR = "data"  # nomenclature_<company>.parquet
 PRICE_PARQUET_PATH = os.path.join(PRICE_SAVE_PATH, "price_list.parquet")
 
 # === НАСТРОЙКА АВТООБНОВЛЕНИЯ НОМЕНКЛАТУРЫ ===
@@ -28,6 +28,7 @@ NOMENCLATURE_REFRESH_DAYS = 3
 
 os.makedirs(RAW_JSON_DIR, exist_ok=True)
 os.makedirs(PRICE_SAVE_PATH, exist_ok=True)
+os.makedirs(NOMENCLATURE_DIR, exist_ok=True)
 os.makedirs(CACHE_FIN_DIR, exist_ok=True)
 os.makedirs(CACHE_ADS_DIR, exist_ok=True)
 os.makedirs(CACHE_STORAGE_DIR, exist_ok=True)
@@ -1683,24 +1684,32 @@ else:
     date_from = st.sidebar.date_input("Дата начала:", st.session_state.date_from)
     date_to = st.sidebar.date_input("Дата конца:", st.session_state.date_to)
 
+    period_days = (date_to - date_from).days + 1
+    period_too_long = period_days > 7
+    if period_too_long:
+        st.sidebar.warning("Выберите период не больше 7 дней")
+
     if (st.session_state.date_from != date_from) or (st.session_state.date_to != date_to):
         clear_loaded_data()
         st.session_state.date_from = date_from
         st.session_state.date_to = date_to
 
     if st.sidebar.button("Получить финансовый отчет"):
-        with st.spinner("Загрузка данных..."):
-            run_load(
-                target_company,
-                raw_api,
-                advertising_api,
-                storage_api,
-                content_api,
-                remaining_goods_api,
-                regions_api,
-                date_from,
-                date_to
-            )
+        if period_too_long:
+            st.sidebar.warning("Выберите период не больше 7 дней")
+        else:
+            with st.spinner("Загрузка данных..."):
+                run_load(
+                    target_company,
+                    raw_api,
+                    advertising_api,
+                    storage_api,
+                    content_api,
+                    remaining_goods_api,
+                    regions_api,
+                    date_from,
+                    date_to
+                )
 
     if st.session_state.status_msg_nom:
         msg = st.session_state.status_msg_nom
@@ -1756,14 +1765,14 @@ else:
 
     if st.session_state.loaded and isinstance(st.session_state.df_fin, pd.DataFrame) and not st.session_state.df_fin.empty:
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📋 Исходный отчет",
+            "📌 Сводная по продажам",
             "📊 Аналитика и расчеты",
             "📦 Остатки по складам",
             "🌍 География продаж",
-            "📌 Сводная по продажам"
+            "📋 Исходный отчет"
         ])
 
-        with tab1:
+        with tab5:
             st.write(f"### 📋 Полные данные: {target_company}")
             st.dataframe(st.session_state.df_fin, use_container_width=True)
 
@@ -2073,7 +2082,7 @@ else:
             else:
                 st.warning("Нет данных для отчета «Продажи по регионам». Проверь токен regions и выбранный период.")
 
-        with tab5:
+        with tab1:
             st.write("### 📌 Сводная по продажам")
 
             if isinstance(st.session_state.df_analysis, pd.DataFrame) and not st.session_state.df_analysis.empty:
