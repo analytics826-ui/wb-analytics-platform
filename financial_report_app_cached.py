@@ -24,7 +24,7 @@ NOMENCLATURE_DIR = r"C:\Streamlit_Projects\data"  # nomenclature_<company>.parqu
 PRICE_PARQUET_PATH = os.path.join(PRICE_SAVE_PATH, "price_list.parquet")
 
 # === НАСТРОЙКА АВТООБНОВЛЕНИЯ НОМЕНКЛАТУРЫ ===
-NOMENCLATURE_REFRESH_DAYS = 7
+NOMENCLATURE_REFRESH_DAYS = 3
 
 os.makedirs(RAW_JSON_DIR, exist_ok=True)
 os.makedirs(PRICE_SAVE_PATH, exist_ok=True)
