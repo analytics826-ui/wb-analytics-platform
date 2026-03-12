@@ -2115,18 +2115,20 @@ else:
                         sales_total = pd.to_numeric(df_summary_view.get("Продаж штук", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         profit_total = pd.to_numeric(df_summary_view.get("Прибыль", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         cost_total = pd.to_numeric(df_summary_view.get("Себестоимость", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+                        ads_total = pd.to_numeric(df_summary_view.get("Реклама", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         fbo_total = pd.to_numeric(df_summary_view.get("Остаток FBO, рублей", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         profitability_total = round((profit_total / cost_total) * 100, 1) if cost_total != 0 else 0.0
                         metric_row = {
                             "Продаж штук": sales_total,
                             "Прибыль": profit_total,
                             "Себестоимость": cost_total,
+                            "Реклама": ads_total,
                             "Рентабельность": profitability_total,
                             "Остаток FBO, рублей": fbo_total,
                         }
 
                     if metric_row is not None:
-                        col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5 = st.columns(5)
+                        col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6 = st.columns(6)
                         with col_kpi_1:
                             st.metric("Продаж штук", format_metric_int(metric_row.get("Продаж штук", 0)))
                         with col_kpi_2:
@@ -2134,8 +2136,10 @@ else:
                         with col_kpi_3:
                             st.metric("Себестоимость", format_metric_money(metric_row.get("Себестоимость", 0), decimals=2))
                         with col_kpi_4:
-                            st.metric("Рентабельность", format_metric_percent(metric_row.get("Рентабельность", 0), decimals=1))
+                            st.metric("Реклама", format_metric_money(metric_row.get("Реклама", 0), decimals=2))
                         with col_kpi_5:
+                            st.metric("Рентабельность", format_metric_percent(metric_row.get("Рентабельность", 0), decimals=1))
+                        with col_kpi_6:
                             st.metric("Остаток FBO, ₽", format_metric_money(metric_row.get("Остаток FBO, рублей", 0), decimals=2))
 
                     format_map_main = {}
