@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 from processor import create_analysis_report
+from telegram_notifier import send_admin_message, send_users_message
 
 # --- НАСТРОЙКИ ПУТЕЙ ---
 API_FILE = "data_api/data_api.xlsx"
