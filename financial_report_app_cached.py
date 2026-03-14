@@ -7,6 +7,8 @@ import os
 import re
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from processor import create_analysis_report
 from telegram_notifier import send_admin_message, send_users_message
@@ -23,6 +25,8 @@ CACHE_REGIONS_DIR = os.path.join(CACHE_DIR, "regions")
 PRICE_SAVE_PATH = "data"
 NOMENCLATURE_DIR = "data"  # nomenclature_<company>.parquet
 PRICE_PARQUET_PATH = os.path.join(PRICE_SAVE_PATH, "price_list.parquet")
+LAST_KPI_SEND_PATH = os.path.join(PRICE_SAVE_PATH, "last_kpi_send.json")
+KPI_LOG_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_log.json")
 
 # === НАСТРОЙКА АВТООБНОВЛЕНИЯ НОМЕНКЛАТУРЫ ===
 NOMENCLATURE_REFRESH_DAYS = 3
@@ -1880,6 +1884,8 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) ->
     has_remaining_goods_col = "remaining_goods" in companies_df.columns
     has_regions_col = "regions" in companies_df.columns
 
+    auto_send_daily_kpi(companies_df)
+
     for _, row in companies_df.iterrows():
         company_name = str(row.get("company", "")).strip()
         if not company_name:
@@ -1939,6 +1945,95 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) ->
             results["logs"].append(f"❌ {company_name}: исключение — {e}")
 
     return results
+
+
+def read_json_file(path: str, default):
+    try:
+        if not os.path.exists(path):
+            return default
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def write_json_file(path: str, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def append_kpi_log(entry: dict):
+    logs = read_json_file(KPI_LOG_PATH, [])
+    if not isinstance(logs, list):
+        logs = []
+    logs.append(entry)
+    logs = logs[-200:]
+    write_json_file(KPI_LOG_PATH, logs)
+
+
+def auto_send_daily_kpi(companies_df: pd.DataFrame):
+    """
+    Автоматическая отправка KPI после 11:00 по Москве.
+    Срабатывает не чаще одного раза в день.
+    Для Streamlit Cloud отправка произойдет при первом открытии приложения после 11:00 МСК.
+    """
+    try:
+        now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
+        today_str = now_msk.strftime("%Y-%m-%d")
+
+        if now_msk.hour < 11:
+            return None
+
+        state = read_json_file(LAST_KPI_SEND_PATH, {})
+        if isinstance(state, dict) and state.get("date") == today_str:
+            return state
+
+        report_date = (now_msk - timedelta(days=1)).date()
+        results = send_daily_kpi_for_all_companies(companies_df, report_date)
+
+        state_payload = {
+            "date": today_str,
+            "report_date": report_date.strftime("%Y-%m-%d"),
+            "sent_at_msk": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+            "success_companies": results.get("success_companies", []),
+            "admin_alert_companies": results.get("admin_alert_companies", []),
+            "error_companies": results.get("error_companies", []),
+            "logs": results.get("logs", []),
+        }
+        write_json_file(LAST_KPI_SEND_PATH, state_payload)
+
+        append_kpi_log({
+            "date": today_str,
+            "report_date": report_date.strftime("%Y-%m-%d"),
+            "sent_at_msk": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+            "success_count": len(results.get("success_companies", [])),
+            "admin_alert_count": len(results.get("admin_alert_companies", [])),
+            "error_count": len(results.get("error_companies", [])),
+            "logs": results.get("logs", []),
+        })
+
+        return state_payload
+
+    except Exception as e:
+        try:
+            send_admin_message(f"❌ Ошибка автоотправки KPI\n\nОшибка: {e}")
+        except Exception:
+            pass
+
+        append_kpi_log({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "report_date": "",
+            "sent_at_msk": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "success_count": 0,
+            "admin_alert_count": 0,
+            "error_count": 1,
+            "logs": [f"❌ Ошибка автоотправки KPI: {e}"],
+        })
+        return None
 
 
 # =========================
