@@ -9,7 +9,6 @@ import time
 from datetime import datetime, timedelta
 
 from processor import create_analysis_report
-from telegram_notifier import send_admin_message
 
 # --- НАСТРОЙКИ ПУТЕЙ ---
 API_FILE = "data_api/data_api.xlsx"
@@ -90,6 +89,7 @@ def init_state():
         "ts_loaded": None,
         "test_kpi_result": None,
         "test_kpi_error": "",
+        "daily_kpi_send_result": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1829,6 +1829,117 @@ def format_metric_percent(value, decimals: int = 1) -> str:
     return f"{value:.{decimals}f}%"
 
 
+def format_daily_kpi_message(company_name: str, report_date, kpi: dict) -> str:
+    report_date_str = report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date)
+    return (
+        "📊 WB Analytics\n\n"
+        f"Дата отчета: {report_date_str}\n"
+        f"Компания: {company_name}\n\n"
+        f"Продаж, штук: {format_metric_int(kpi.get('Продаж штук', 0))}\n"
+        f"Прибыль: {format_metric_money(kpi.get('Прибыль', 0), 2)}\n"
+        f"Рентабельность: {format_metric_percent(kpi.get('Рентабельность', 0), 1)}\n"
+        f"Реклама: {format_metric_money(kpi.get('Реклама', 0), 2)}\n"
+        f"Хранение: {format_metric_money(kpi.get('Хранение', 0), 2)}\n"
+        f"Остаток FBO, ₽: {format_metric_money(kpi.get('Остаток FBO, ₽', 0), 2)}"
+    )
+
+
+def format_missing_cost_message(company_name: str, report_date, barcodes: list[str]) -> str:
+    report_date_str = report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date)
+    barcode_lines = "\n".join(str(bc) for bc in barcodes[:200])
+    extra = ""
+    if len(barcodes) > 200:
+        extra = f"\n... и еще {len(barcodes) - 200} шт."
+    return (
+        "⚠️ Нет себестоимости\n\n"
+        f"Дата отчета: {report_date_str}\n"
+        f"Компания: {company_name}\n"
+        f"Количество баркодов без себестоимости: {len(barcodes)}\n\n"
+        "Баркоды:\n"
+        f"{barcode_lines}{extra}"
+    )
+
+
+def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) -> dict:
+    results = {
+        "report_date": report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date),
+        "success_companies": [],
+        "admin_alert_companies": [],
+        "error_companies": [],
+        "logs": [],
+    }
+
+    if companies_df is None or companies_df.empty:
+        results["error_companies"].append("Нет компаний для обработки")
+        results["logs"].append("❌ Не найден список компаний")
+        return results
+
+    has_storage_col = "storage" in companies_df.columns
+    has_content_col = "content" in companies_df.columns
+    has_remaining_goods_col = "remaining_goods" in companies_df.columns
+    has_regions_col = "regions" in companies_df.columns
+
+    for _, row in companies_df.iterrows():
+        company_name = str(row.get("company", "")).strip()
+        if not company_name:
+            continue
+
+        try:
+            result = get_company_kpi_and_missing_cost(
+                company_name=company_name,
+                api_fin=row.get("api", ""),
+                api_ads=row.get("advertising_api", ""),
+                api_storage=row.get("storage", "") if has_storage_col else "",
+                content_api=row.get("content", "") if has_content_col else "",
+                remaining_goods_api=row.get("remaining_goods", "") if has_remaining_goods_col else "",
+                regions_api=row.get("regions", "") if has_regions_col else "",
+                date_from=report_date,
+                date_to=report_date,
+            )
+
+            if result.get("status") != "success":
+                err = result.get("error", "Неизвестная ошибка")
+                send_admin_message(
+                    f"❌ Ошибка daily KPI\n\nДата отчета: {results['report_date']}\nКомпания: {company_name}\nОшибка: {err}"
+                )
+                results["error_companies"].append(company_name)
+                results["logs"].append(f"❌ {company_name}: ошибка — {err}")
+                continue
+
+            missing_barcodes = result.get("missing_cost_barcodes", []) or []
+            if missing_barcodes:
+                admin_text = format_missing_cost_message(company_name, report_date, missing_barcodes)
+                send_admin_message(admin_text)
+                results["admin_alert_companies"].append(company_name)
+                results["logs"].append(
+                    f"⚠️ {company_name}: отправлено админу, нет себестоимости по {len(missing_barcodes)} баркодам"
+                )
+                continue
+
+            text = format_daily_kpi_message(company_name, report_date, result.get("kpi", {}))
+            send_results = send_users_message(company_name, text)
+
+            if send_results:
+                ok_count = sum(1 for x in send_results if x.get("ok"))
+                results["success_companies"].append(company_name)
+                results["logs"].append(
+                    f"✅ {company_name}: KPI отправлен получателям ({ok_count}/{len(send_results)})"
+                )
+            else:
+                results["logs"].append(
+                    f"ℹ️ {company_name}: для компании не найдено получателей в telegram_users"
+                )
+
+        except Exception as e:
+            send_admin_message(
+                f"❌ Ошибка daily KPI\n\nДата отчета: {results['report_date']}\nКомпания: {company_name}\nОшибка: {e}"
+            )
+            results["error_companies"].append(company_name)
+            results["logs"].append(f"❌ {company_name}: исключение — {e}")
+
+    return results
+
+
 # =========================
 # UI
 # =========================
@@ -1958,6 +2069,23 @@ else:
                     st.sidebar.error("Ошибка отправки")
             except Exception as e:
                 st.sidebar.error(f"Ошибка Telegram: {e}")
+
+    with st.sidebar.expander("📨 Daily KPI в Telegram", expanded=False):
+        st.caption("Ручной запуск KPI по всем компаниям за вчерашнюю дату")
+        yesterday_report_date = (datetime.now() - timedelta(days=1)).date()
+        st.write(f"Дата отчета: {yesterday_report_date.strftime('%d.%m.%Y')}")
+        if st.button("Отправить KPI по всем компаниям", key="btn_send_daily_kpi_all"):
+            with st.spinner("Отправляем KPI по всем компаниям..."):
+                send_result = send_daily_kpi_for_all_companies(companies_df, yesterday_report_date)
+                st.session_state["daily_kpi_send_result"] = send_result
+
+    daily_kpi_send_result = st.session_state.get("daily_kpi_send_result")
+    if daily_kpi_send_result:
+        st.sidebar.info(
+            f"Daily KPI: успешно {len(daily_kpi_send_result.get('success_companies', []))}, "
+            f"алертов админу {len(daily_kpi_send_result.get('admin_alert_companies', []))}, "
+            f"ошибок {len(daily_kpi_send_result.get('error_companies', []))}"
+        )
 
     if st.session_state.status_msg_nom:
         msg = st.session_state.status_msg_nom
