@@ -7,8 +7,11 @@ import os
 import re
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from processor import create_analysis_report
+from telegram_notifier import send_admin_message, send_users_message
 
 # --- НАСТРОЙКИ ПУТЕЙ ---
 API_FILE = "data_api/data_api.xlsx"
@@ -22,6 +25,8 @@ CACHE_REGIONS_DIR = os.path.join(CACHE_DIR, "regions")
 PRICE_SAVE_PATH = "data"
 NOMENCLATURE_DIR = "data"  # nomenclature_<company>.parquet
 PRICE_PARQUET_PATH = os.path.join(PRICE_SAVE_PATH, "price_list.parquet")
+LAST_KPI_SEND_PATH = os.path.join(PRICE_SAVE_PATH, "last_kpi_send.json")
+KPI_LOG_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_log.json")
 
 # === НАСТРОЙКА АВТООБНОВЛЕНИЯ НОМЕНКЛАТУРЫ ===
 NOMENCLATURE_REFRESH_DAYS = 3
@@ -87,6 +92,9 @@ def init_state():
         "status_msg_nom": "",
 
         "ts_loaded": None,
+        "test_kpi_result": None,
+        "test_kpi_error": "",
+        "daily_kpi_send_result": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1395,7 +1403,7 @@ def enrich_region_sales_with_category(df_region_sales: pd.DataFrame, df_nom: pd.
     df = df.drop(columns=["_nm_id_norm"], errors="ignore")
     return df
 
-def run_load(
+def prepare_report_bundle(
     company_name: str,
     api_fin: str,
     api_ads: str,
@@ -1405,19 +1413,16 @@ def run_load(
     regions_api: str,
     date_from,
     date_to
-):
-    clear_loaded_data()
-
-    # 1) Номенклатура: сначала проверяем/обновляем
+) -> dict:
+    """
+    Общая функция подготовки всех данных по компании и периоду.
+    Используется и UI, и будущим daily-digest сценарием.
+    Ничего не пишет в session_state — только возвращает готовый bundle.
+    """
     df_nom, msg_nom = ensure_nomenclature_for_company(company_name, content_api)
-    st.session_state.status_msg_nom = msg_nom
 
-    # 2) Основные отчеты
     report_data, msg_fin = fetch_financial_report(api_fin, company_name, date_from, date_to)
-    st.session_state.status_msg_fin = msg_fin
-
     ads_data, msg_ads = fetch_advertising_report(api_ads, company_name, date_from, date_to)
-    st.session_state.status_msg_ads = msg_ads
 
     storage_data = None
     msg_storage = ""
@@ -1425,8 +1430,6 @@ def run_load(
         storage_data, msg_storage = fetch_paid_storage_report(api_storage, company_name, date_from, date_to)
     else:
         msg_storage = "ℹ Платное хранение: токен storage не указан в data_api.xlsx"
-        storage_data = None
-    st.session_state.status_msg_storage = msg_storage
 
     stocks_data = None
     msg_stocks = ""
@@ -1434,19 +1437,14 @@ def run_load(
         stocks_data, msg_stocks = fetch_warehouse_remains_report(remaining_goods_api, company_name)
     else:
         msg_stocks = "ℹ Остатки на складах: токен remaining_goods не указан в data_api.xlsx"
-        stocks_data = None
-    st.session_state.status_msg_stocks = msg_stocks
 
     region_sales_data, msg_regions = fetch_region_sales_report(regions_api, company_name, date_from, date_to)
-    st.session_state.status_msg_regions = msg_regions
 
     df_fin = pd.DataFrame(report_data) if report_data else pd.DataFrame()
     df_ads = pd.DataFrame(ads_data) if ads_data else pd.DataFrame()
     df_ads = add_article_column_from_campname(df_ads)
 
     df_storage = pd.DataFrame(storage_data) if isinstance(storage_data, list) else pd.DataFrame()
-
-    # если WB вернул пустой storage при первом запросе — пробуем взять уже сохраненный cache
     if df_storage.empty:
         cache_path = build_cache_file_path("storage", company_name, date_from, date_to)
         cached_storage = load_from_cache(cache_path)
@@ -1494,6 +1492,82 @@ def run_load(
     df_missing_cost_stocks = get_missing_cost_stocks_barcodes(df_stocks, df_price)
     df_stocks_by_warehouse = create_stocks_by_warehouse_report(df_stocks, df_nom)
 
+    return {
+        "company_name": company_name,
+        "date_from": date_from,
+        "date_to": date_to,
+        "period_label": period_label,
+        "report_data": report_data,
+        "ads_data": ads_data,
+        "storage_data": storage_data,
+        "stocks_data": stocks_data,
+        "region_sales_data": region_sales_data,
+        "df_fin": df_fin,
+        "df_ads": df_ads,
+        "df_storage": df_storage,
+        "df_stocks": df_stocks,
+        "df_region_sales": df_region_sales,
+        "df_region_sales_geo": df_region_sales_geo,
+        "df_nom": df_nom,
+        "df_price": df_price,
+        "df_analysis": df_analysis,
+        "df_missing_cost_barcodes": df_missing_cost_barcodes,
+        "df_missing_cost_stocks": df_missing_cost_stocks,
+        "df_stocks_by_warehouse": df_stocks_by_warehouse,
+        "status_msg_nom": msg_nom,
+        "status_msg_fin": msg_fin,
+        "status_msg_ads": msg_ads,
+        "status_msg_storage": msg_storage,
+        "status_msg_stocks": msg_stocks,
+        "status_msg_regions": msg_regions,
+    }
+
+
+def run_load(
+    company_name: str,
+    api_fin: str,
+    api_ads: str,
+    api_storage: str,
+    content_api: str,
+    remaining_goods_api: str,
+    regions_api: str,
+    date_from,
+    date_to
+):
+    clear_loaded_data()
+
+    bundle = prepare_report_bundle(
+        company_name=company_name,
+        api_fin=api_fin,
+        api_ads=api_ads,
+        api_storage=api_storage,
+        content_api=content_api,
+        remaining_goods_api=remaining_goods_api,
+        regions_api=regions_api,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    st.session_state.status_msg_nom = bundle["status_msg_nom"]
+    st.session_state.status_msg_fin = bundle["status_msg_fin"]
+    st.session_state.status_msg_ads = bundle["status_msg_ads"]
+    st.session_state.status_msg_storage = bundle["status_msg_storage"]
+    st.session_state.status_msg_stocks = bundle["status_msg_stocks"]
+    st.session_state.status_msg_regions = bundle["status_msg_regions"]
+
+    df_fin = bundle["df_fin"]
+    df_ads = bundle["df_ads"]
+    df_storage = bundle["df_storage"]
+    df_stocks = bundle["df_stocks"]
+    df_region_sales = bundle["df_region_sales"]
+    df_region_sales_geo = bundle["df_region_sales_geo"]
+    df_nom = bundle["df_nom"]
+    df_price = bundle["df_price"]
+    df_analysis = bundle["df_analysis"]
+    df_missing_cost_barcodes = bundle["df_missing_cost_barcodes"]
+    df_missing_cost_stocks = bundle["df_missing_cost_stocks"]
+    df_stocks_by_warehouse = bundle["df_stocks_by_warehouse"]
+
     excel_fin_raw = to_excel(df_fin, sheet_name="Financial_Report") if not df_fin.empty else None
     excel_ads_raw = to_excel(df_ads, sheet_name="Ads_Report") if not df_ads.empty else None
     excel_storage_raw = to_excel(df_storage, sheet_name="Paid_Storage") if not df_storage.empty else None
@@ -1523,11 +1597,11 @@ def run_load(
     st.session_state.date_from = date_from
     st.session_state.date_to = date_to
 
-    st.session_state.report_data = report_data
-    st.session_state.ads_data = ads_data
-    st.session_state.storage_data = storage_data
-    st.session_state.stocks_data = stocks_data
-    st.session_state.region_sales_data = region_sales_data
+    st.session_state.report_data = bundle["report_data"]
+    st.session_state.ads_data = bundle["ads_data"]
+    st.session_state.storage_data = bundle["storage_data"]
+    st.session_state.stocks_data = bundle["stocks_data"]
+    st.session_state.region_sales_data = bundle["region_sales_data"]
 
     st.session_state.df_fin = df_fin
     st.session_state.df_ads = df_ads
@@ -1553,8 +1627,6 @@ def run_load(
     st.session_state.excel_stocks_by_warehouse = excel_stocks_by_warehouse
 
     st.session_state.ts_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
 
 
 def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
@@ -1609,6 +1681,144 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _build_total_kpi_from_summary(df_summary: pd.DataFrame) -> dict:
+    if df_summary is None or df_summary.empty:
+        return {
+            "Продаж штук": 0,
+            "Прибыль": 0.0,
+            "Рентабельность": 0.0,
+            "Реклама": 0.0,
+            "Хранение": 0.0,
+            "Остаток FBO, ₽": 0.0,
+        }
+
+    df = df_summary.copy()
+    if "Категория" in df.columns:
+        total_mask = df["Категория"].astype(str).str.strip() == "Итого"
+        if total_mask.any():
+            total_row = df.loc[total_mask].iloc[-1]
+        else:
+            total_row = None
+    else:
+        total_row = None
+
+    numeric_columns = [
+        "Продаж штук",
+        "Прибыль",
+        "Себестоимость",
+        "Реклама",
+        "Хранение",
+        "Остаток FBO, рублей",
+    ]
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    if total_row is not None:
+        sales_qty = float(pd.to_numeric(total_row.get("Продаж штук", 0), errors="coerce"))
+        profit = float(pd.to_numeric(total_row.get("Прибыль", 0), errors="coerce"))
+        cost = float(pd.to_numeric(total_row.get("Себестоимость", 0), errors="coerce"))
+        ads = float(pd.to_numeric(total_row.get("Реклама", 0), errors="coerce"))
+        storage = float(pd.to_numeric(total_row.get("Хранение", 0), errors="coerce"))
+        stocks_rub = float(pd.to_numeric(total_row.get("Остаток FBO, рублей", 0), errors="coerce"))
+    else:
+        if "Категория" in df.columns:
+            df = df[df["Категория"].astype(str).str.strip() != "Итого"].copy()
+        sales_qty = float(df["Продаж штук"].sum()) if "Продаж штук" in df.columns else 0.0
+        profit = float(df["Прибыль"].sum()) if "Прибыль" in df.columns else 0.0
+        cost = float(df["Себестоимость"].sum()) if "Себестоимость" in df.columns else 0.0
+        ads = float(df["Реклама"].sum()) if "Реклама" in df.columns else 0.0
+        storage = float(df["Хранение"].sum()) if "Хранение" in df.columns else 0.0
+        stocks_rub = float(df["Остаток FBO, рублей"].sum()) if "Остаток FBO, рублей" in df.columns else 0.0
+
+    profitability = round((profit / cost) * 100, 1) if cost else 0.0
+
+    return {
+        "Продаж штук": int(round(sales_qty)),
+        "Прибыль": round(profit, 2),
+        "Рентабельность": profitability,
+        "Реклама": round(ads, 2),
+        "Хранение": round(storage, 2),
+        "Остаток FBO, ₽": round(stocks_rub, 2),
+    }
+
+
+def get_company_kpi_and_missing_cost(
+    company_name: str,
+    api_fin: str,
+    api_ads: str,
+    api_storage: str,
+    content_api: str,
+    remaining_goods_api: str,
+    regions_api: str,
+    date_from,
+    date_to,
+) -> dict:
+    """
+    Возвращает KPI по компании за период + список баркодов без себестоимости.
+    Это первая базовая функция для будущего daily-digest и Telegram-уведомлений.
+    """
+    result = {
+        "status": "error",
+        "error": "",
+        "company_name": company_name,
+        "date_from": str(date_from),
+        "date_to": str(date_to),
+        "kpi": {
+            "Продаж штук": 0,
+            "Прибыль": 0.0,
+            "Рентабельность": 0.0,
+            "Реклама": 0.0,
+            "Хранение": 0.0,
+            "Остаток FBO, ₽": 0.0,
+        },
+        "missing_cost_barcodes": [],
+        "missing_cost_count": 0,
+        "df_summary": pd.DataFrame(),
+        "df_analysis": pd.DataFrame(),
+    }
+
+    try:
+        bundle = prepare_report_bundle(
+            company_name=company_name,
+            api_fin=api_fin,
+            api_ads=api_ads,
+            api_storage=api_storage,
+            content_api=content_api,
+            remaining_goods_api=remaining_goods_api,
+            regions_api=regions_api,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+        df_analysis = bundle.get("df_analysis", pd.DataFrame())
+        df_summary = build_sales_summary_report(df_analysis)
+        kpi = _build_total_kpi_from_summary(df_summary)
+
+        df_missing = bundle.get("df_missing_cost_barcodes", pd.DataFrame())
+        if isinstance(df_missing, pd.DataFrame) and not df_missing.empty and "Баркод" in df_missing.columns:
+            missing_cost_barcodes = (
+                df_missing["Баркод"]
+                .astype(str)
+                .str.strip()
+                .replace({"nan": "", "None": ""})
+            )
+            missing_cost_barcodes = sorted([x for x in missing_cost_barcodes.tolist() if x])
+        else:
+            missing_cost_barcodes = []
+
+        result["status"] = "success"
+        result["kpi"] = kpi
+        result["missing_cost_barcodes"] = missing_cost_barcodes
+        result["missing_cost_count"] = len(missing_cost_barcodes)
+        result["df_summary"] = df_summary
+        result["df_analysis"] = df_analysis
+        return result
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+
 def format_metric_int(value) -> str:
     value = pd.to_numeric(pd.Series([value]), errors="coerce").fillna(0).iloc[0]
     return f"{int(round(value)):,}".replace(",", " ")
@@ -1622,6 +1832,206 @@ def format_metric_money(value, decimals: int = 2) -> str:
 def format_metric_percent(value, decimals: int = 1) -> str:
     value = pd.to_numeric(pd.Series([value]), errors="coerce").fillna(0).iloc[0]
     return f"{value:.{decimals}f}%"
+
+
+def format_daily_kpi_message(company_name: str, report_date, kpi: dict) -> str:
+    report_date_str = report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date)
+    return (
+        "📊 WB Analytics\n\n"
+        f"Дата отчета: {report_date_str}\n"
+        f"Компания: {company_name}\n\n"
+        f"Продаж, штук: {format_metric_int(kpi.get('Продаж штук', 0))}\n"
+        f"Прибыль: {format_metric_money(kpi.get('Прибыль', 0), 2)}\n"
+        f"Рентабельность: {format_metric_percent(kpi.get('Рентабельность', 0), 1)}\n"
+        f"Реклама: {format_metric_money(kpi.get('Реклама', 0), 2)}\n"
+        f"Хранение: {format_metric_money(kpi.get('Хранение', 0), 2)}\n"
+        f"Остаток FBO, ₽: {format_metric_money(kpi.get('Остаток FBO, ₽', 0), 2)}"
+    )
+
+
+def format_missing_cost_message(company_name: str, report_date, barcodes: list[str]) -> str:
+    report_date_str = report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date)
+    barcode_lines = "\n".join(str(bc) for bc in barcodes[:200])
+    extra = ""
+    if len(barcodes) > 200:
+        extra = f"\n... и еще {len(barcodes) - 200} шт."
+    return (
+        "⚠️ Нет себестоимости\n\n"
+        f"Дата отчета: {report_date_str}\n"
+        f"Компания: {company_name}\n"
+        f"Количество баркодов без себестоимости: {len(barcodes)}\n\n"
+        "Баркоды:\n"
+        f"{barcode_lines}{extra}"
+    )
+
+
+def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) -> dict:
+    results = {
+        "report_date": report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date),
+        "success_companies": [],
+        "admin_alert_companies": [],
+        "error_companies": [],
+        "logs": [],
+    }
+
+    if companies_df is None or companies_df.empty:
+        results["error_companies"].append("Нет компаний для обработки")
+        results["logs"].append("❌ Не найден список компаний")
+        return results
+
+    has_storage_col = "storage" in companies_df.columns
+    has_content_col = "content" in companies_df.columns
+    has_remaining_goods_col = "remaining_goods" in companies_df.columns
+    has_regions_col = "regions" in companies_df.columns
+
+    for _, row in companies_df.iterrows():
+        company_name = str(row.get("company", "")).strip()
+        if not company_name:
+            continue
+
+        try:
+            result = get_company_kpi_and_missing_cost(
+                company_name=company_name,
+                api_fin=row.get("api", ""),
+                api_ads=row.get("advertising_api", ""),
+                api_storage=row.get("storage", "") if has_storage_col else "",
+                content_api=row.get("content", "") if has_content_col else "",
+                remaining_goods_api=row.get("remaining_goods", "") if has_remaining_goods_col else "",
+                regions_api=row.get("regions", "") if has_regions_col else "",
+                date_from=report_date,
+                date_to=report_date,
+            )
+
+            if result.get("status") != "success":
+                err = result.get("error", "Неизвестная ошибка")
+                send_admin_message(
+                    f"❌ Ошибка daily KPI\n\nДата отчета: {results['report_date']}\nКомпания: {company_name}\nОшибка: {err}"
+                )
+                results["error_companies"].append(company_name)
+                results["logs"].append(f"❌ {company_name}: ошибка — {err}")
+                continue
+
+            missing_barcodes = result.get("missing_cost_barcodes", []) or []
+            if missing_barcodes:
+                admin_text = format_missing_cost_message(company_name, report_date, missing_barcodes)
+                send_admin_message(admin_text)
+                results["admin_alert_companies"].append(company_name)
+                results["logs"].append(
+                    f"⚠️ {company_name}: отправлено админу, нет себестоимости по {len(missing_barcodes)} баркодам"
+                )
+                continue
+
+            text = format_daily_kpi_message(company_name, report_date, result.get("kpi", {}))
+            send_results = send_users_message(company_name, text)
+
+            if send_results:
+                ok_count = sum(1 for x in send_results if x.get("ok"))
+                results["success_companies"].append(company_name)
+                results["logs"].append(
+                    f"✅ {company_name}: KPI отправлен получателям ({ok_count}/{len(send_results)})"
+                )
+            else:
+                results["logs"].append(
+                    f"ℹ️ {company_name}: для компании не найдено получателей в telegram_users"
+                )
+
+        except Exception as e:
+            send_admin_message(
+                f"❌ Ошибка daily KPI\n\nДата отчета: {results['report_date']}\nКомпания: {company_name}\nОшибка: {e}"
+            )
+            results["error_companies"].append(company_name)
+            results["logs"].append(f"❌ {company_name}: исключение — {e}")
+
+    return results
+
+
+def read_json_file(path: str, default):
+    try:
+        if not os.path.exists(path):
+            return default
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def write_json_file(path: str, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def append_kpi_log(entry: dict):
+    logs = read_json_file(KPI_LOG_PATH, [])
+    if not isinstance(logs, list):
+        logs = []
+    logs.append(entry)
+    logs = logs[-200:]
+    write_json_file(KPI_LOG_PATH, logs)
+
+
+def auto_send_daily_kpi(companies_df: pd.DataFrame):
+    """
+    Автоматическая отправка KPI после 11:00 по Москве.
+    Срабатывает не чаще одного раза в день.
+    Для Streamlit Cloud отправка произойдет при первом открытии приложения после 11:00 МСК.
+    """
+    try:
+        now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
+        today_str = now_msk.strftime("%Y-%m-%d")
+
+        if now_msk.hour < 11:
+            return None
+
+        state = read_json_file(LAST_KPI_SEND_PATH, {})
+        if isinstance(state, dict) and state.get("date") == today_str:
+            return state
+
+        report_date = (now_msk - timedelta(days=1)).date()
+        results = send_daily_kpi_for_all_companies(companies_df, report_date)
+
+        state_payload = {
+            "date": today_str,
+            "report_date": report_date.strftime("%Y-%m-%d"),
+            "sent_at_msk": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+            "success_companies": results.get("success_companies", []),
+            "admin_alert_companies": results.get("admin_alert_companies", []),
+            "error_companies": results.get("error_companies", []),
+            "logs": results.get("logs", []),
+        }
+        write_json_file(LAST_KPI_SEND_PATH, state_payload)
+
+        append_kpi_log({
+            "date": today_str,
+            "report_date": report_date.strftime("%Y-%m-%d"),
+            "sent_at_msk": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+            "success_count": len(results.get("success_companies", [])),
+            "admin_alert_count": len(results.get("admin_alert_companies", [])),
+            "error_count": len(results.get("error_companies", [])),
+            "logs": results.get("logs", []),
+        })
+
+        return state_payload
+
+    except Exception as e:
+        try:
+            send_admin_message(f"❌ Ошибка автоотправки KPI\n\nОшибка: {e}")
+        except Exception:
+            pass
+
+        append_kpi_log({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "report_date": "",
+            "sent_at_msk": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "success_count": 0,
+            "admin_alert_count": 0,
+            "error_count": 1,
+            "logs": [f"❌ Ошибка автоотправки KPI: {e}"],
+        })
+        return None
 
 
 # =========================
@@ -1721,6 +2131,56 @@ else:
                     date_to
                 )
 
+    with st.sidebar.expander("🧪 Тест daily KPI функции", expanded=False):
+        st.caption("Проверка новой функции: KPI по компании + баркоды без себестоимости")
+        if st.button("Запустить тест KPI функции", key="btn_test_kpi_function"):
+            if period_too_long:
+                st.warning("Для теста выберите период не больше 7 дней")
+            else:
+                with st.spinner("Тестируем KPI-функцию..."):
+                    test_result = get_company_kpi_and_missing_cost(
+                        company_name=target_company,
+                        api_fin=raw_api,
+                        api_ads=advertising_api,
+                        api_storage=storage_api,
+                        content_api=content_api,
+                        remaining_goods_api=remaining_goods_api,
+                        regions_api=regions_api,
+                        date_from=date_from,
+                        date_to=date_to,
+                    )
+                    st.session_state.test_kpi_result = test_result
+                    st.session_state.test_kpi_error = test_result.get("error", "")
+
+    with st.sidebar.expander("🤖 Telegram тест", expanded=False):
+        st.caption("Проверка подключения Telegram-бота")
+        if st.button("Отправить тестовое сообщение", key="btn_test_telegram_message"):
+            try:
+                ok = send_admin_message("✅ Telegram подключен к WB Analytics Platform")
+                if ok:
+                    st.sidebar.success("Сообщение отправлено")
+                else:
+                    st.sidebar.error("Ошибка отправки")
+            except Exception as e:
+                st.sidebar.error(f"Ошибка Telegram: {e}")
+
+    with st.sidebar.expander("📨 Daily KPI в Telegram", expanded=False):
+        st.caption("Ручной запуск KPI по всем компаниям за вчерашнюю дату")
+        yesterday_report_date = (datetime.now() - timedelta(days=1)).date()
+        st.write(f"Дата отчета: {yesterday_report_date.strftime('%d.%m.%Y')}")
+        if st.button("Отправить KPI по всем компаниям", key="btn_send_daily_kpi_all"):
+            with st.spinner("Отправляем KPI по всем компаниям..."):
+                send_result = send_daily_kpi_for_all_companies(companies_df, yesterday_report_date)
+                st.session_state["daily_kpi_send_result"] = send_result
+
+    daily_kpi_send_result = st.session_state.get("daily_kpi_send_result")
+    if daily_kpi_send_result:
+        st.sidebar.info(
+            f"Daily KPI: успешно {len(daily_kpi_send_result.get('success_companies', []))}, "
+            f"алертов админу {len(daily_kpi_send_result.get('admin_alert_companies', []))}, "
+            f"ошибок {len(daily_kpi_send_result.get('error_companies', []))}"
+        )
+
     if st.session_state.status_msg_nom:
         msg = st.session_state.status_msg_nom
         if msg.startswith("✅") or msg.startswith("ℹ"):
@@ -1772,6 +2232,35 @@ else:
             st.sidebar.error(msg)
         else:
             st.sidebar.info(msg)
+
+    if st.session_state.test_kpi_result is not None:
+        st.markdown("## 🧪 Результат теста KPI-функции")
+        test_result = st.session_state.test_kpi_result
+        if test_result.get("status") != "success":
+            st.error(f"Ошибка тестовой функции: {test_result.get('error', 'Неизвестная ошибка')}")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Компания", test_result.get("company_name", ""))
+            c2.metric("Период с", test_result.get("date_from", ""))
+            c3.metric("Период по", test_result.get("date_to", ""))
+
+            kpi = test_result.get("kpi", {})
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Продаж, штук", format_metric_int(kpi.get("Продаж штук", 0)))
+            k2.metric("Прибыль", format_metric_money(kpi.get("Прибыль", 0)))
+            k3.metric("Рентабельность", format_metric_percent(kpi.get("Рентабельность", 0)))
+
+            k4, k5, k6 = st.columns(3)
+            k4.metric("Реклама", format_metric_money(kpi.get("Реклама", 0)))
+            k5.metric("Хранение", format_metric_money(kpi.get("Хранение", 0)))
+            k6.metric("Остаток FBO, ₽", format_metric_money(kpi.get("Остаток FBO, ₽", 0)))
+
+            st.write(f"**Баркодов без себестоимости:** {test_result.get('missing_cost_count', 0)}")
+            missing_list = test_result.get("missing_cost_barcodes", [])
+            if missing_list:
+                st.code("\n".join(missing_list))
+            else:
+                st.success("По продажам за выбранный период все баркоды имеют себестоимость.")
 
     if st.session_state.loaded and isinstance(st.session_state.df_fin, pd.DataFrame) and not st.session_state.df_fin.empty:
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
