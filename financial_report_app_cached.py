@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 from processor import create_analysis_report
+from telegram_notifier import send_admin_message
 
 # --- НАСТРОЙКИ ПУТЕЙ ---
 API_FILE = "data_api/data_api.xlsx"
@@ -1945,6 +1946,18 @@ else:
                     )
                     st.session_state.test_kpi_result = test_result
                     st.session_state.test_kpi_error = test_result.get("error", "")
+
+    with st.sidebar.expander("🤖 Telegram тест", expanded=False):
+        st.caption("Проверка подключения Telegram-бота")
+        if st.button("Отправить тестовое сообщение", key="btn_test_telegram_message"):
+            try:
+                ok = send_admin_message("✅ Telegram подключен к WB Analytics Platform")
+                if ok:
+                    st.sidebar.success("Сообщение отправлено")
+                else:
+                    st.sidebar.error("Ошибка отправки")
+            except Exception as e:
+                st.sidebar.error(f"Ошибка Telegram: {e}")
 
     if st.session_state.status_msg_nom:
         msg = st.session_state.status_msg_nom
