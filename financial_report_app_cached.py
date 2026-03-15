@@ -1978,6 +1978,10 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
     Автоматическая отправка KPI после 11:00 по Москве.
     Срабатывает не чаще одного раза в день.
     Для Streamlit Cloud отправка произойдет при первом открытии приложения после 11:00 МСК.
+
+    Важно:
+    Streamlit может несколько раз перезапускать скрипт при открытии страницы,
+    поэтому защитная запись в LAST_KPI_SEND_PATH ставится ДО фактической отправки.
     """
     try:
         now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
@@ -1991,12 +1995,27 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
             return state
 
         report_date = (now_msk - timedelta(days=1)).date()
+
+        # Ставим защитную метку ДО отправки, чтобы второй rerun не отправил дубли.
+        pending_state = {
+            "date": today_str,
+            "report_date": report_date.strftime("%Y-%m-%d"),
+            "sent_at_msk": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "sending",
+            "success_companies": [],
+            "admin_alert_companies": [],
+            "error_companies": [],
+            "logs": ["ℹ️ Автоотправка KPI запущена"],
+        }
+        write_json_file(LAST_KPI_SEND_PATH, pending_state)
+
         results = send_daily_kpi_for_all_companies(companies_df, report_date)
 
         state_payload = {
             "date": today_str,
             "report_date": report_date.strftime("%Y-%m-%d"),
             "sent_at_msk": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "sent",
             "success_companies": results.get("success_companies", []),
             "admin_alert_companies": results.get("admin_alert_companies", []),
             "error_companies": results.get("error_companies", []),
@@ -2008,6 +2027,7 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
             "date": today_str,
             "report_date": report_date.strftime("%Y-%m-%d"),
             "sent_at_msk": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "sent",
             "success_count": len(results.get("success_companies", [])),
             "admin_alert_count": len(results.get("admin_alert_companies", [])),
             "error_count": len(results.get("error_companies", [])),
@@ -2022,14 +2042,28 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
         except Exception:
             pass
 
-        append_kpi_log({
-            "date": datetime.now().strftime("%Y-%m-%d"),
+        error_now = datetime.now(ZoneInfo("Europe/Moscow"))
+        error_payload = {
+            "date": error_now.strftime("%Y-%m-%d"),
             "report_date": "",
-            "sent_at_msk": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "sent_at_msk": error_now.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "error",
+            "success_companies": [],
+            "admin_alert_companies": [],
+            "error_companies": ["auto_send_daily_kpi"],
+            "logs": [f"❌ Ошибка автоотправки KPI: {e}"],
+        }
+        write_json_file(LAST_KPI_SEND_PATH, error_payload)
+
+        append_kpi_log({
+            "date": error_payload["date"],
+            "report_date": "",
+            "sent_at_msk": error_payload["sent_at_msk"],
+            "status": "error",
             "success_count": 0,
             "admin_alert_count": 0,
             "error_count": 1,
-            "logs": [f"❌ Ошибка автоотправки KPI: {e}"],
+            "logs": error_payload["logs"],
         })
         return None
 
