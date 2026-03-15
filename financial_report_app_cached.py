@@ -2076,6 +2076,8 @@ else:
     has_remaining_goods_col = "remaining_goods" in companies_df.columns
     has_regions_col = "regions" in companies_df.columns
 
+    auto_send_daily_kpi(companies_df)
+
     company_list = list(companies_df["company"].unique())
     default_company = st.session_state.selected_company if st.session_state.selected_company in company_list else company_list[0]
     target_company = st.sidebar.selectbox("Выберите компанию:", company_list, index=company_list.index(default_company))
