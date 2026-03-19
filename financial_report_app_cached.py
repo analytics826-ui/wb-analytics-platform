@@ -2098,7 +2098,12 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
         now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
         today_str = now_msk.strftime("%Y-%m-%d")
 
+        # Автоотправка разрешена только в окне 11:00–11:30 МСК.
+        # После 11:30 в этот день автоотправка не запускается,
+        # чтобы избежать повторных сообщений после reboot / redeploy.
         if now_msk.hour < 11:
+            return None
+        if now_msk.hour > 11 or (now_msk.hour == 11 and now_msk.minute > 30):
             return None
 
         state = read_json_file(LAST_KPI_SEND_PATH, {})
@@ -2313,6 +2318,7 @@ else:
 
     with st.sidebar.expander("📨 Daily KPI в Telegram", expanded=False):
         st.caption("Ручной запуск KPI по всем компаниям за вчерашнюю дату")
+        st.caption("Автоотправка работает только с 11:00 до 11:30 МСК")
         yesterday_report_date = (datetime.now() - timedelta(days=1)).date()
         st.write(f"Дата отчета: {yesterday_report_date.strftime('%d.%m.%Y')}")
         if st.button("Отправить KPI по всем компаниям", key="btn_send_daily_kpi_all"):
