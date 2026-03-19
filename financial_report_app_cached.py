@@ -2070,6 +2070,11 @@ def make_sales_missing_all_companies_excel_bytes(rows_df: pd.DataFrame, date_fro
     Формирует Excel по всем кабинетам только для блока:
     Продажи без себестоимости.
 
+    Важно:
+    Для корректности берём не bundle['df_missing_cost_barcodes'],
+    а результат validate_cost_data(...)["missing_sales_df"], потому что именно
+    эта логика сейчас совпадает с блоком «Проверить себестоимость».
+
     Возвращает:
     - bytes Excel
     - DataFrame с колонками: Кабинет, Баркод
@@ -2112,11 +2117,24 @@ def make_sales_missing_all_companies_excel_bytes(rows_df: pd.DataFrame, date_fro
                 date_to=date_to,
             )
 
-            df_missing_sales = bundle.get("df_missing_cost_barcodes", pd.DataFrame())
+            validation_result = validate_cost_data(
+                company_name=company_name,
+                date_from=date_from,
+                date_to=date_to,
+                df_fin=bundle.get("df_fin", pd.DataFrame()),
+                df_stocks=bundle.get("df_stocks", pd.DataFrame()),
+                df_price=bundle.get("df_price", pd.DataFrame()),
+                df_missing_cost_barcodes=bundle.get("df_missing_cost_barcodes", pd.DataFrame()),
+                df_missing_cost_stocks=bundle.get("df_missing_cost_stocks", pd.DataFrame()),
+            )
+
+            df_missing_sales = validation_result.get("missing_sales_df", pd.DataFrame())
+
             if isinstance(df_missing_sales, pd.DataFrame) and not df_missing_sales.empty and "Баркод" in df_missing_sales.columns:
                 part = df_missing_sales[["Баркод"]].copy()
                 part["Кабинет"] = company_name
                 parts.append(part[["Кабинет", "Баркод"]])
+
         except Exception:
             continue
 
@@ -2131,7 +2149,9 @@ def make_sales_missing_all_companies_excel_bytes(rows_df: pd.DataFrame, date_fro
         ].copy()
         export_df["Баркод"] = pd.to_numeric(export_df["Баркод"], errors="coerce")
         export_df = export_df.dropna(subset=["Баркод"]).copy()
+        export_df["Баркод"] = export_df["Баркод"].astype("int64")
         export_df = export_df.drop_duplicates(subset=["Кабинет", "Баркод"]).reset_index(drop=True)
+        export_df = export_df.sort_values(["Кабинет", "Баркод"]).reset_index(drop=True)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
