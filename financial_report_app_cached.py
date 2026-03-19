@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from processor import create_analysis_report
 from telegram_notifier import send_admin_message, send_users_message
+from cost_validator import validate_cost_data, make_barcodes_excel_bytes
 
 # --- НАСТРОЙКИ ПУТЕЙ ---
 API_FILE = "data_api/data_api.xlsx"
