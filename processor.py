@@ -474,17 +474,7 @@ def create_analysis_report(
             pay_comp_ret = df_cat[df_cat.iloc[:, 24] == "Добровольная компенсация при возврате"].iloc[:, 42].sum()
             pay_comp_dmg = df_cat[df_cat.iloc[:, 24] == "Компенсация ущерба"].iloc[:, 42].sum()
             total_to_pay = pay_sales - pay_returns + pay_comp_ret + pay_comp_dmg
-            
-# --- Отзывы за баллы (НОВАЯ ЛОГИКА) ---
-try:
-    reviews_df = df_finance[
-        (df_finance["supplier_oper_name"] == "Удержание") &
-        (df_finance["bonus_type_name"].astype(str).str.contains("Списание за отзыв", case=False, na=False))
-    ]
-    reviews_total = float(reviews_df["deduction"].sum())
-except Exception:
-    reviews_total = 0.0
-
+            reviews_total = 0.0
             fbo_total = 0.0
             total_costs = (
                 float(total_logistics)
@@ -681,6 +671,26 @@ except Exception:
             .to_dict()
         )
 
+    # --- Отзывы за баллы: сумма deduction по категории, где операция = "Удержание"
+    #     и bonus_type_name содержит "Списание за отзыв" ---
+    reviews_by_cat = {}
+    bonus_type_col = _pick_column_by_exact_or_contains(
+        df_fin,
+        exact="bonus_type_name",
+        contains_any=["bonus_type_name", "bonus", "тип бонуса"]
+    )
+    if deduction_col and bonus_type_col:
+        df_fin["_bonus_type_name"] = df_fin[bonus_type_col].astype(str).str.strip()
+        reviews_by_cat = (
+            df_fin[
+                (df_fin["_op"].str.strip().str.lower() == "удержание")
+                & (df_fin["_bonus_type_name"].str.contains("Списание за отзыв", case=False, na=False))
+            ]
+            .groupby("_cat")["_deduction_val"]
+            .sum()
+            .to_dict()
+        )
+
     # --- Компенсация скидки по программе лояльности ---
     loyalty_discount_by_cat = {}
     if "cashback_discount" in df_fin.columns:
@@ -791,17 +801,7 @@ except Exception:
         loyalty_commission_total = float(loyalty_commission_by_cat.get(cat, 0.0))
         loyalty_points_total = float(loyalty_points_by_cat.get(cat, 0.0))
         retail_price_total = float(retail_price_by_cat.get(cat, 0.0))
-        
-# --- Отзывы за баллы (НОВАЯ ЛОГИКА) ---
-try:
-    reviews_df = df_finance[
-        (df_finance["supplier_oper_name"] == "Удержание") &
-        (df_finance["bonus_type_name"].astype(str).str.contains("Списание за отзыв", case=False, na=False))
-    ]
-    reviews_total = float(reviews_df["deduction"].sum())
-except Exception:
-    reviews_total = 0.0
-
+        reviews_total = float(reviews_by_cat.get(cat, 0.0))
         fbo_total = 0.0
         subscription_total = 0.0
 
