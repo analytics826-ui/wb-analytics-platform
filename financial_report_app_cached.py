@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 
 from processor import create_analysis_report
 from telegram_notifier import send_admin_message, send_users_message
-from cost_validator import validate_cost_data, make_barcodes_excel_bytes
 
 # --- НАСТРОЙКИ ПУТЕЙ ---
 API_FILE = "data_api/data_api.xlsx"
@@ -96,6 +95,7 @@ def init_state():
         "test_kpi_result": None,
         "test_kpi_error": "",
         "daily_kpi_send_result": None,
+        "cost_validation_results": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -142,6 +142,7 @@ def clear_loaded_data():
     st.session_state.status_msg_nom = ""
 
     st.session_state.ts_loaded = None
+    st.session_state.cost_validation_results = None
 
 
 init_state()
@@ -1946,6 +1947,113 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) ->
     return results
 
 
+
+def format_validation_percent(value) -> str:
+    value = pd.to_numeric(pd.Series([value]), errors="coerce").fillna(0).iloc[0]
+    return f"{value:.1f}%"
+
+
+def build_cost_validation_admin_message(validation_result: dict) -> str:
+    company_name = validation_result.get("company_name", "")
+    date_from = validation_result.get("date_from", "")
+    date_to = validation_result.get("date_to", "")
+    status = validation_result.get("status", "error")
+
+    status_map = {
+        "ok": "✅ OK",
+        "warning": "⚠️ WARNING",
+        "critical": "❌ CRITICAL",
+        "error": "❌ ERROR",
+    }
+    status_text = status_map.get(status, status.upper())
+
+    if status == "error":
+        return (
+            "🧪 Проверка себестоимости\n\n"
+            f"Компания: {company_name}\n"
+            f"Период: {date_from} — {date_to}\n"
+            f"Статус: {status_text}\n\n"
+            f"Ошибка: {validation_result.get('error', 'Неизвестная ошибка')}"
+        )
+
+    return (
+        "🧪 Проверка себестоимости\n\n"
+        f"Компания: {company_name}\n"
+        f"Период: {date_from} — {date_to}\n"
+        f"Статус: {status_text}\n\n"
+        f"Продажи без себестоимости: {validation_result.get('sales_missing_count', 0)}\n"
+        f"Покрытие продаж: {format_validation_percent(validation_result.get('sales_coverage_pct', 0))}\n"
+        f"Остатки без себестоимости: {validation_result.get('stocks_missing_count', 0)}\n"
+        f"Покрытие остатков: {format_validation_percent(validation_result.get('stocks_coverage_pct', 0))}\n"
+        f"Всего проблемных баркодов: {validation_result.get('missing_total_count', 0)}"
+    )
+
+
+def run_cost_validation_for_rows(rows_df: pd.DataFrame, date_from, date_to) -> list[dict]:
+    results = []
+
+    if rows_df is None or rows_df.empty:
+        return results
+
+    has_storage_col = "storage" in rows_df.columns
+    has_content_col = "content" in rows_df.columns
+    has_remaining_goods_col = "remaining_goods" in rows_df.columns
+    has_regions_col = "regions" in rows_df.columns
+
+    for _, row in rows_df.iterrows():
+        company_name = str(row.get("company", "")).strip()
+        if not company_name:
+            continue
+
+        try:
+            bundle = prepare_report_bundle(
+                company_name=company_name,
+                api_fin=row.get("api", ""),
+                api_ads=row.get("advertising_api", ""),
+                api_storage=row.get("storage", "") if has_storage_col else "",
+                content_api=row.get("content", "") if has_content_col else "",
+                remaining_goods_api=row.get("remaining_goods", "") if has_remaining_goods_col else "",
+                regions_api=row.get("regions", "") if has_regions_col else "",
+                date_from=date_from,
+                date_to=date_to,
+            )
+
+            validation_result = validate_cost_data(
+                company_name=company_name,
+                date_from=date_from,
+                date_to=date_to,
+                df_fin=bundle.get("df_fin", pd.DataFrame()),
+                df_stocks=bundle.get("df_stocks", pd.DataFrame()),
+                df_price=bundle.get("df_price", pd.DataFrame()),
+                df_missing_cost_barcodes=bundle.get("df_missing_cost_barcodes", pd.DataFrame()),
+                df_missing_cost_stocks=bundle.get("df_missing_cost_stocks", pd.DataFrame()),
+            )
+        except Exception as e:
+            validation_result = {
+                "company_name": company_name,
+                "date_from": str(date_from),
+                "date_to": str(date_to),
+                "status": "error",
+                "error": str(e),
+                "sales_missing_count": 0,
+                "stocks_missing_count": 0,
+                "sales_coverage_pct": 0.0,
+                "stocks_coverage_pct": 0.0,
+                "missing_total_count": 0,
+                "missing_sales_df": pd.DataFrame(columns=["Баркод"]),
+                "missing_stocks_df": pd.DataFrame(columns=["Баркод"]),
+                "missing_all_df": pd.DataFrame(columns=["Баркод"]),
+            }
+
+        try:
+            send_admin_message(build_cost_validation_admin_message(validation_result))
+        except Exception as e:
+            validation_result["telegram_error"] = str(e)
+
+        results.append(validation_result)
+
+    return results
+
 def read_json_file(path: str, default):
     try:
         if not os.path.exists(path):
@@ -2067,114 +2175,6 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
             "logs": error_payload["logs"],
         })
         return None
-
-
-
-
-def _build_cost_validation_telegram_text(result: dict) -> str:
-    status_map = {
-        "ok": "✅ OK",
-        "warning": "⚠️ WARNING",
-        "critical": "❌ CRITICAL",
-        "error": "❌ ERROR",
-    }
-    status = status_map.get(str(result.get("status", "")).lower(), str(result.get("status", "")).upper())
-    company_name = result.get("company_name", "")
-    date_from = result.get("date_from", "")
-    date_to = result.get("date_to", "")
-    lines = [
-        f"🧪 Проверка себестоимости",
-        f"Компания: {company_name}",
-        f"Период: {date_from} — {date_to}",
-        f"Статус: {status}",
-        "",
-        f"Продажи: всего баркодов {result.get('sales_barcodes_total', 0)}, без себестоимости {result.get('sales_missing_count', 0)}, coverage {result.get('sales_coverage_pct', 0)}%",
-        f"Остатки: всего баркодов {result.get('stocks_barcodes_total', 0)}, без себестоимости {result.get('stocks_missing_count', 0)}, coverage {result.get('stocks_coverage_pct', 0)}%",
-        f"Итого проблемных баркодов: {result.get('missing_total_count', 0)}",
-    ]
-    err = str(result.get("error", "")).strip()
-    if err:
-        lines.extend(["", f"Ошибка: {err}"])
-    return "\n".join(lines)
-
-
-def _run_cost_validation_for_company(company_name: str, api_fin: str, api_ads: str, api_storage: str, content_api: str, remaining_goods_api: str, regions_api: str, date_from, date_to) -> dict:
-    bundle = prepare_report_bundle(
-        company_name=company_name,
-        api_fin=api_fin,
-        api_ads=api_ads,
-        api_storage=api_storage,
-        content_api=content_api,
-        remaining_goods_api=remaining_goods_api,
-        regions_api=regions_api,
-        date_from=date_from,
-        date_to=date_to,
-    )
-    return validate_cost_data(
-        company_name=company_name,
-        date_from=date_from,
-        date_to=date_to,
-        df_fin=bundle.get("df_fin"),
-        df_stocks=bundle.get("df_stocks"),
-        df_price=bundle.get("df_price"),
-        df_missing_cost_barcodes=bundle.get("df_missing_cost_barcodes"),
-        df_missing_cost_stocks=bundle.get("df_missing_cost_stocks"),
-    )
-
-
-def _render_cost_validation_results(results: list[dict]):
-    if not results:
-        return
-
-    st.subheader("🧪 Результат проверки себестоимости")
-
-    ok_count = sum(1 for x in results if str(x.get("status", "")).lower() == "ok")
-    warning_count = sum(1 for x in results if str(x.get("status", "")).lower() == "warning")
-    critical_count = sum(1 for x in results if str(x.get("status", "")).lower() == "critical")
-    error_count = sum(1 for x in results if str(x.get("status", "")).lower() == "error")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("OK", ok_count)
-    c2.metric("WARNING", warning_count)
-    c3.metric("CRITICAL", critical_count)
-    c4.metric("ERROR", error_count)
-
-    for idx, result in enumerate(results, start=1):
-        company_name = result.get("company_name", "")
-        status = str(result.get("status", "")).lower()
-        status_label = {"ok": "✅ OK", "warning": "⚠️ WARNING", "critical": "❌ CRITICAL", "error": "❌ ERROR"}.get(status, status.upper())
-        title = f"{idx}. {company_name} — {status_label}"
-
-        with st.expander(title, expanded=(status != "ok")):
-            if status == "error":
-                st.error(result.get("error", "Ошибка проверки"))
-            elif status == "critical":
-                st.error("Проверка нашла критичные проблемы с себестоимостью.")
-            elif status == "warning":
-                st.warning("Проверка нашла проблемные баркоды.")
-            else:
-                st.success("Проблем не найдено.")
-
-            a1, a2, a3 = st.columns(3)
-            a1.metric("Продажи без себестоимости", result.get("sales_missing_count", 0))
-            a2.metric("Остатки без себестоимости", result.get("stocks_missing_count", 0))
-            a3.metric("Всего проблемных баркодов", result.get("missing_total_count", 0))
-
-            b1, b2 = st.columns(2)
-            b1.metric("Coverage продаж, %", result.get("sales_coverage_pct", 0.0))
-            b2.metric("Coverage остатков, %", result.get("stocks_coverage_pct", 0.0))
-
-            missing_all_df = result.get("missing_all_df")
-            if isinstance(missing_all_df, pd.DataFrame) and not missing_all_df.empty:
-                st.dataframe(missing_all_df, use_container_width=True, height=260)
-                st.download_button(
-                    label="📥 Скачать Excel по баркодам",
-                    data=make_barcodes_excel_bytes(missing_all_df),
-                    file_name=f"missing_cost_barcodes_{sanitize_filename(company_name)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    key=f"dl_cost_validator_{idx}",
-                )
-            elif status != "error":
-                st.success("Проблемных баркодов не найдено.")
 
 
 # =========================
@@ -2319,60 +2319,22 @@ else:
                 st.session_state["daily_kpi_send_result"] = send_result
 
     with st.sidebar.expander("🧪 Проверка себестоимости", expanded=False):
+        st.caption("Тестовый режим: отправляет админу диагностику, но не блокирует KPI")
         validation_scope = st.selectbox(
-            "Режим проверки",
+            "Режим проверки:",
             ["Выбранная компания", "Все компании"],
-            key="cost_validation_scope",
+            index=0,
+            key="cost_validation_scope_selectbox",
         )
-
         if st.button("Проверить себестоимость", key="btn_run_cost_validation"):
             if period_too_long:
                 st.warning("Для проверки выберите период не больше 7 дней")
             else:
-                results = []
                 with st.spinner("Проверяем себестоимость..."):
+                    rows_df = companies_df[companies_df["company"] == target_company].copy()
                     if validation_scope == "Все компании":
-                        run_df = companies_df.copy()
-                    else:
-                        run_df = companies_df[companies_df["company"] == target_company].copy()
-
-                    for _, company_row in run_df.iterrows():
-                        company_name = company_row["company"]
-                        try:
-                            result = _run_cost_validation_for_company(
-                                company_name=company_name,
-                                api_fin=company_row.get("api", ""),
-                                api_ads=company_row.get("advertising_api", ""),
-                                api_storage=company_row.get("storage", "") if has_storage_col else "",
-                                content_api=company_row.get("content", "") if has_content_col else "",
-                                remaining_goods_api=company_row.get("remaining_goods", "") if has_remaining_goods_col else "",
-                                regions_api=company_row.get("regions", "") if has_regions_col else "",
-                                date_from=date_from,
-                                date_to=date_to,
-                            )
-                        except Exception as e:
-                            result = {
-                                "company_name": company_name,
-                                "date_from": str(date_from),
-                                "date_to": str(date_to),
-                                "status": "error",
-                                "error": str(e),
-                                "sales_missing_count": 0,
-                                "stocks_missing_count": 0,
-                                "missing_total_count": 0,
-                                "sales_coverage_pct": 0.0,
-                                "stocks_coverage_pct": 0.0,
-                                "missing_all_df": pd.DataFrame(columns=["Баркод"]),
-                            }
-
-                        results.append(result)
-
-                        try:
-                            send_admin_message(_build_cost_validation_telegram_text(result))
-                        except Exception:
-                            pass
-
-                st.session_state.cost_validation_results = results
+                        rows_df = companies_df.copy()
+                    st.session_state.cost_validation_results = run_cost_validation_for_rows(rows_df, date_from, date_to)
 
     daily_kpi_send_result = st.session_state.get("daily_kpi_send_result")
     if daily_kpi_send_result:
@@ -2462,6 +2424,63 @@ else:
                 st.code("\n".join(missing_list))
             else:
                 st.success("По продажам за выбранный период все баркоды имеют себестоимость.")
+
+    cost_validation_results = st.session_state.get("cost_validation_results")
+    if cost_validation_results:
+        st.markdown("## 🧪 Результат проверки себестоимости")
+
+        ok_count = sum(1 for x in cost_validation_results if x.get("status") == "ok")
+        warn_count = sum(1 for x in cost_validation_results if x.get("status") == "warning")
+        critical_count = sum(1 for x in cost_validation_results if x.get("status") == "critical")
+        error_count = sum(1 for x in cost_validation_results if x.get("status") == "error")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("OK", ok_count)
+        c2.metric("WARNING", warn_count)
+        c3.metric("CRITICAL", critical_count)
+        c4.metric("ERROR", error_count)
+
+        for idx, item in enumerate(cost_validation_results, start=1):
+            company_name = item.get("company_name", "")
+            status = item.get("status", "error")
+            status_label = {
+                "ok": "✅ OK",
+                "warning": "⚠️ WARNING",
+                "critical": "❌ CRITICAL",
+                "error": "❌ ERROR",
+            }.get(status, status.upper())
+
+            with st.expander(f"{idx}. {company_name} — {status_label}", expanded=(status in ["warning", "critical", "error"])):
+                if status == "error":
+                    st.error(item.get("error", "Неизвестная ошибка"))
+                else:
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Продажи без себестоимости", int(item.get("sales_missing_count", 0)))
+                    m2.metric("Покрытие продаж", format_validation_percent(item.get("sales_coverage_pct", 0)))
+                    m3.metric("Остатки без себестоимости", int(item.get("stocks_missing_count", 0)))
+                    m4.metric("Покрытие остатков", format_validation_percent(item.get("stocks_coverage_pct", 0)))
+
+                missing_all_df = item.get("missing_all_df", pd.DataFrame())
+                if isinstance(missing_all_df, pd.DataFrame) and not missing_all_df.empty:
+                    st.write("### Проблемные баркоды")
+                    st.dataframe(missing_all_df, use_container_width=True)
+                    try:
+                        excel_bytes = make_barcodes_excel_bytes(missing_all_df)
+                        file_company = sanitize_filename(company_name)
+                        st.download_button(
+                            label="📥 Скачать Excel по баркодам",
+                            data=excel_bytes,
+                            file_name=f"Missing_Cost_Barcodes_{file_company}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            key=f"dl_cost_validation_{idx}",
+                        )
+                    except Exception as e:
+                        st.warning(f"Не удалось подготовить Excel: {e}")
+                else:
+                    st.success("Проблемных баркодов не найдено.")
+
+                tg_error = item.get("telegram_error", "")
+                if tg_error:
+                    st.warning(f"Telegram не отправлен: {tg_error}")
 
     if st.session_state.loaded and isinstance(st.session_state.df_fin, pd.DataFrame) and not st.session_state.df_fin.empty:
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -2924,3 +2943,24 @@ else:
                 st.warning("Нет данных для сводной по продажам. Сначала загрузите аналитический отчет.")
     else:
         st.info("Выбери компанию и период, затем нажми «Получить финансовый отчет».")
+
+
+# === FORCE DOWNLOAD BUTTON (FIX) ===
+try:
+    if 'df_missing_cost_barcodes' in st.session_state:
+        df_all = st.session_state.get("df_missing_cost_barcodes")
+        if df_all is None:
+            df_all = pd.DataFrame(columns=["Баркод"])
+    else:
+        df_all = pd.DataFrame(columns=["Баркод"])
+
+    excel_bytes = make_barcodes_excel_bytes(df_all)
+
+    st.download_button(
+        "Скачать Excel по баркодам",
+        data=excel_bytes,
+        file_name="missing_barcodes.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+except Exception as e:
+    st.warning(f"Ошибка кнопки Excel: {e}")
