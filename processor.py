@@ -671,6 +671,15 @@ def create_analysis_report(
             .to_dict()
         )
 
+    # --- Для отзывов за баллы по-прежнему нужен deduction ---
+    deduction_col = _pick_column_by_exact_or_contains(
+        df_fin,
+        exact="deduction",
+        contains_any=["deduction", "удерж", "вычет"]
+    )
+    if deduction_col:
+        df_fin["_deduction_val"] = pd.to_numeric(df_fin[deduction_col], errors="coerce").fillna(0.0)
+
     # --- Отзывы за баллы: сумма deduction по категории, где операция = "Удержание"
     #     и bonus_type_name содержит "Списание за отзыв" ---
     reviews_by_cat = {}
