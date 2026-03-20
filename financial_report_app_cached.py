@@ -1941,6 +1941,8 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date, se
         "admin_alert_companies": [],
         "error_companies": [],
         "logs": [],
+        "success_recipient_count": 0,
+        "error_recipient_count": 0,
     }
 
     if companies_df is None or companies_df.empty:
@@ -2013,6 +2015,10 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date, se
 
             if send_results:
                 ok_count = sum(1 for x in send_results if x.get("ok"))
+                error_count = sum(1 for x in send_results if not x.get("ok"))
+                results["success_recipient_count"] += ok_count
+                results["error_recipient_count"] += error_count
+
                 append_kpi_history(build_kpi_history_entry(
                     company_name=company_name,
                     report_date=report_date,
@@ -2022,7 +2028,8 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date, se
                     error_text="",
                     recipient_count=ok_count,
                 ))
-                results["success_companies"].append(company_name)
+                if ok_count > 0:
+                    results["success_companies"].append(company_name)
                 results["logs"].append(
                     f"✅ {company_name}: KPI отправлен получателям ({ok_count}/{len(send_results)})"
                 )
@@ -2391,6 +2398,7 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
         write_json_file(LAST_KPI_SEND_PATH, pending_state)
 
         results = send_daily_kpi_for_all_companies(companies_df, report_date, send_type="auto")
+        send_admin_summary_message(results, report_date, send_type="auto")
 
         state_payload = {
             "date": today_str,
@@ -2400,6 +2408,8 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
             "success_companies": results.get("success_companies", []),
             "admin_alert_companies": results.get("admin_alert_companies", []),
             "error_companies": results.get("error_companies", []),
+            "success_recipient_count": results.get("success_recipient_count", 0),
+            "error_recipient_count": results.get("error_recipient_count", 0),
             "logs": results.get("logs", []),
         }
         write_json_file(LAST_KPI_SEND_PATH, state_payload)
@@ -2648,6 +2658,7 @@ else:
         if st.button("Отправить KPI по всем компаниям", key="btn_send_daily_kpi_all"):
             with st.spinner("Отправляем KPI по всем компаниям..."):
                 send_result = send_daily_kpi_for_all_companies(companies_df, yesterday_report_date, send_type="manual")
+                send_admin_summary_message(send_result, yesterday_report_date, send_type="manual")
                 st.session_state["daily_kpi_send_result"] = send_result
 
     with st.sidebar.expander("🧪 Проверка себестоимости", expanded=False):
@@ -2709,9 +2720,11 @@ else:
     daily_kpi_send_result = st.session_state.get("daily_kpi_send_result")
     if daily_kpi_send_result:
         st.sidebar.info(
-            f"Daily KPI: успешно {len(daily_kpi_send_result.get('success_companies', []))}, "
+            f"Daily KPI: компаний {len(daily_kpi_send_result.get('success_companies', []))}, "
+            f"получателей OK {daily_kpi_send_result.get('success_recipient_count', 0)}, "
+            f"ошибок отправки {daily_kpi_send_result.get('error_recipient_count', 0)}, "
             f"алертов админу {len(daily_kpi_send_result.get('admin_alert_companies', []))}, "
-            f"ошибок {len(daily_kpi_send_result.get('error_companies', []))}"
+            f"ошибок компаний {len(daily_kpi_send_result.get('error_companies', []))}"
         )
 
     if st.session_state.status_msg_nom:
