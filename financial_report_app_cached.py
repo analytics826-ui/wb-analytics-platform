@@ -1908,6 +1908,32 @@ def format_missing_cost_message(company_name: str, report_date, barcodes: list[s
     )
 
 
+
+
+def send_admin_summary_message(results, report_date, admin_name="Ivan", send_type="auto"):
+    try:
+        companies = results.get("success_companies", [])
+        success = int(results.get("success_recipient_count", 0))
+        errors = int(results.get("error_recipient_count", 0))
+
+        report_date_str = report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date)
+
+        companies_text = "\n".join(companies) if companies else "—"
+
+        text = (
+            f"{admin_name}\n"
+            f"Период {report_date_str}\n\n"
+            f"Компании:\n{companies_text}\n\n"
+            f"Тип: {send_type}\n"
+            f"Успешно: {success}\n"
+            f"Ошибок: {errors}"
+        )
+
+        send_admin_message(text)
+
+    except Exception as e:
+        print(f"Admin summary error: {e}")
+
 def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date, send_type: str = "manual") -> dict:
     results = {
         "report_date": report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date),
