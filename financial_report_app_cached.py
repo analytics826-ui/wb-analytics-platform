@@ -29,6 +29,36 @@ NOMENCLATURE_DIR = "data"  # nomenclature_<company>.parquet
 PRICE_PARQUET_PATH = os.path.join(PRICE_SAVE_PATH, "price_list.parquet")
 LAST_KPI_SEND_PATH = os.path.join(PRICE_SAVE_PATH, "last_kpi_send.json")
 KPI_LOG_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_log.json")
+
+KPI_HISTORY_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_history.parquet")
+
+KPI_HISTORY_COLUMN_MAP = {
+    "datetime_send": "Дата отправки",
+    "report_date": "Дата отчета",
+    "company": "Кабинет",
+    "sales_qty": "Продажи, шт",
+    "profit": "Прибыль, ₽",
+    "profitability": "Рентабельность, %",
+    "ads": "Реклама, ₽",
+    "storage": "Хранение, ₽",
+    "stocks_fbo_rub": "Остаток FBO, ₽",
+    "missing_cost_count": "Баркоды без себестоимости",
+    "send_type": "Тип отправки",
+    "status": "Статус",
+    "recipient_count": "Кол-во получателей",
+    "error_text": "Текст ошибки",
+}
+
+def rename_kpi_history_columns_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=list(KPI_HISTORY_COLUMN_MAP.values()))
+    out = df.copy()
+    cols = [c for c in out.columns if c in KPI_HISTORY_COLUMN_MAP]
+    out = out.rename(columns={c: KPI_HISTORY_COLUMN_MAP[c] for c in cols})
+    preferred = [v for v in KPI_HISTORY_COLUMN_MAP.values() if v in out.columns]
+    remaining = [c for c in out.columns if c not in preferred]
+    return out[preferred + remaining].copy()
+
 KPI_HISTORY_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_history.parquet")
 
 # === НАСТРОЙКА АВТООБНОВЛЕНИЯ НОМЕНКЛАТУРЫ ===
@@ -2448,11 +2478,11 @@ if choice == "📈 История KPI":
             ] if c in df_view.columns]
             st.dataframe(df_view[display_columns].sort_values(["report_date", "company"], ascending=[False, True]), use_container_width=True, height=520)
 
-            hist_excel = to_excel(df_view[display_columns], sheet_name="KPI_History")
+            hist_excel = to_excel(df_view[display_columns], sheet_name="История KPI")
             st.download_button(
                 label="📥 Скачать историю KPI",
                 data=hist_excel,
-                file_name=f"KPI_History_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=f"История_KPI_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 key="dl_kpi_history"
             )
         else:
