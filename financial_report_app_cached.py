@@ -29,6 +29,7 @@ NOMENCLATURE_DIR = "data"  # nomenclature_<company>.parquet
 PRICE_PARQUET_PATH = os.path.join(PRICE_SAVE_PATH, "price_list.parquet")
 LAST_KPI_SEND_PATH = os.path.join(PRICE_SAVE_PATH, "last_kpi_send.json")
 KPI_LOG_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_log.json")
+KPI_HISTORY_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_history.parquet")
 
 # === НАСТРОЙКА АВТООБНОВЛЕНИЯ НОМЕНКЛАТУРЫ ===
 NOMENCLATURE_REFRESH_DAYS = 3
@@ -1877,7 +1878,7 @@ def format_missing_cost_message(company_name: str, report_date, barcodes: list[s
     )
 
 
-def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) -> dict:
+def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date, send_type: str = "manual") -> dict:
     results = {
         "report_date": report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date),
         "success_companies": [],
@@ -1919,6 +1920,15 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) ->
                 send_admin_message(
                     f"❌ Ошибка daily KPI\n\nДата отчета: {results['report_date']}\nКомпания: {company_name}\nОшибка: {err}"
                 )
+                append_kpi_history(build_kpi_history_entry(
+                    company_name=company_name,
+                    report_date=report_date,
+                    result=result,
+                    send_type=send_type,
+                    send_status="ERROR",
+                    error_text=str(err),
+                    recipient_count=0,
+                ))
                 results["error_companies"].append(company_name)
                 results["logs"].append(f"❌ {company_name}: ошибка — {err}")
                 continue
@@ -1927,6 +1937,15 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) ->
             if missing_barcodes:
                 admin_text = format_missing_cost_message(company_name, report_date, missing_barcodes)
                 send_admin_message(admin_text)
+                append_kpi_history(build_kpi_history_entry(
+                    company_name=company_name,
+                    report_date=report_date,
+                    result=result,
+                    send_type=send_type,
+                    send_status="ALERT",
+                    error_text="Нет себестоимости",
+                    recipient_count=0,
+                ))
                 results["admin_alert_companies"].append(company_name)
                 results["logs"].append(
                     f"⚠️ {company_name}: отправлено админу, нет себестоимости по {len(missing_barcodes)} баркодам"
@@ -1938,11 +1957,29 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) ->
 
             if send_results:
                 ok_count = sum(1 for x in send_results if x.get("ok"))
+                append_kpi_history(build_kpi_history_entry(
+                    company_name=company_name,
+                    report_date=report_date,
+                    result=result,
+                    send_type=send_type,
+                    send_status="OK",
+                    error_text="",
+                    recipient_count=ok_count,
+                ))
                 results["success_companies"].append(company_name)
                 results["logs"].append(
                     f"✅ {company_name}: KPI отправлен получателям ({ok_count}/{len(send_results)})"
                 )
             else:
+                append_kpi_history(build_kpi_history_entry(
+                    company_name=company_name,
+                    report_date=report_date,
+                    result=result,
+                    send_type=send_type,
+                    send_status="NO_RECIPIENTS",
+                    error_text="Для компании не найдено получателей",
+                    recipient_count=0,
+                ))
                 results["logs"].append(
                     f"ℹ️ {company_name}: для компании не найдено получателей в telegram_users"
                 )
@@ -1951,6 +1988,15 @@ def send_daily_kpi_for_all_companies(companies_df: pd.DataFrame, report_date) ->
             send_admin_message(
                 f"❌ Ошибка daily KPI\n\nДата отчета: {results['report_date']}\nКомпания: {company_name}\nОшибка: {e}"
             )
+            append_kpi_history(build_kpi_history_entry(
+                company_name=company_name,
+                report_date=report_date,
+                result={},
+                send_type=send_type,
+                send_status="ERROR",
+                error_text=str(e),
+                recipient_count=0,
+            ))
             results["error_companies"].append(company_name)
             results["logs"].append(f"❌ {company_name}: исключение — {e}")
 
@@ -2193,6 +2239,60 @@ def append_kpi_log(entry: dict):
     write_json_file(KPI_LOG_PATH, logs)
 
 
+def append_kpi_history(entry: dict):
+    try:
+        os.makedirs(os.path.dirname(KPI_HISTORY_PATH), exist_ok=True)
+        if os.path.exists(KPI_HISTORY_PATH):
+            df_hist = pd.read_parquet(KPI_HISTORY_PATH)
+        else:
+            df_hist = pd.DataFrame()
+
+        df_new = pd.DataFrame([entry])
+        df_hist = pd.concat([df_hist, df_new], ignore_index=True)
+        df_hist.to_parquet(KPI_HISTORY_PATH, index=False, engine="pyarrow")
+    except Exception:
+        pass
+
+
+def load_kpi_history() -> pd.DataFrame:
+    try:
+        if not os.path.exists(KPI_HISTORY_PATH):
+            return pd.DataFrame()
+        return pd.read_parquet(KPI_HISTORY_PATH)
+    except Exception:
+        return pd.DataFrame()
+
+
+def build_kpi_history_entry(
+    company_name: str,
+    report_date,
+    result: dict,
+    send_type: str,
+    send_status: str,
+    error_text: str = "",
+    recipient_count: int = 0,
+) -> dict:
+    kpi = result.get("kpi", {}) if isinstance(result, dict) else {}
+    report_date_str = report_date.strftime("%Y-%m-%d") if hasattr(report_date, "strftime") else str(report_date)
+    now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
+    return {
+        "datetime_send": now_msk.strftime("%Y-%m-%d %H:%M:%S"),
+        "report_date": report_date_str,
+        "company": company_name,
+        "sales_qty": int(pd.to_numeric(pd.Series([kpi.get("Продаж штук", 0)]), errors="coerce").fillna(0).iloc[0]),
+        "profit": float(pd.to_numeric(pd.Series([kpi.get("Прибыль", 0)]), errors="coerce").fillna(0).iloc[0]),
+        "profitability": float(pd.to_numeric(pd.Series([kpi.get("Рентабельность", 0)]), errors="coerce").fillna(0).iloc[0]),
+        "ads": float(pd.to_numeric(pd.Series([kpi.get("Реклама", 0)]), errors="coerce").fillna(0).iloc[0]),
+        "storage": float(pd.to_numeric(pd.Series([kpi.get("Хранение", 0)]), errors="coerce").fillna(0).iloc[0]),
+        "stocks_fbo_rub": float(pd.to_numeric(pd.Series([kpi.get("Остаток FBO, ₽", 0)]), errors="coerce").fillna(0).iloc[0]),
+        "missing_cost_count": int(result.get("missing_cost_count", 0)) if isinstance(result, dict) else 0,
+        "send_type": send_type,
+        "status": send_status,
+        "error_text": error_text,
+        "recipient_count": int(recipient_count),
+    }
+
+
 def auto_send_daily_kpi(companies_df: pd.DataFrame):
     """
     Автоматическая отправка KPI после 11:00 по Москве.
@@ -2234,7 +2334,7 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
         }
         write_json_file(LAST_KPI_SEND_PATH, pending_state)
 
-        results = send_daily_kpi_for_all_companies(companies_df, report_date)
+        results = send_daily_kpi_for_all_companies(companies_df, report_date, send_type="auto")
 
         state_payload = {
             "date": today_str,
@@ -2297,9 +2397,68 @@ def auto_send_daily_kpi(companies_df: pd.DataFrame):
 # UI
 # =========================
 st.sidebar.title("Меню управления")
-choice = st.sidebar.radio("Переключить вкладку:", ["📊 Отчеты", "📥 Загрузить Прайс"])
+choice = st.sidebar.radio("Переключить вкладку:", ["📊 Отчеты", "📈 История KPI", "📥 Загрузить Прайс"])
 
-if choice == "📥 Загрузить Прайс":
+if choice == "📈 История KPI":
+    st.title("📈 История KPI")
+    df_kpi_history = load_kpi_history()
+
+    if df_kpi_history.empty:
+        st.info("Лог KPI пока пуст. Отправь KPI вручную или дождись автоотправки.")
+    else:
+        if "report_date" in df_kpi_history.columns:
+            df_kpi_history["report_date"] = pd.to_datetime(df_kpi_history["report_date"], errors="coerce").dt.date
+        if "datetime_send" in df_kpi_history.columns:
+            df_kpi_history["datetime_send"] = pd.to_datetime(df_kpi_history["datetime_send"], errors="coerce")
+
+        col1, col2, col3 = st.columns(3)
+        company_options = ["Все компании"] + sorted([str(x) for x in df_kpi_history.get("company", pd.Series(dtype="object")).dropna().unique().tolist()])
+        selected_hist_company = col1.selectbox("Компания", company_options, index=0, key="hist_company_filter")
+
+        if "report_date" in df_kpi_history.columns and df_kpi_history["report_date"].notna().any():
+            min_date = df_kpi_history["report_date"].dropna().min()
+            max_date = df_kpi_history["report_date"].dropna().max()
+        else:
+            today = datetime.now().date()
+            min_date = today
+            max_date = today
+
+        date_start = col2.date_input("Дата с", value=min_date, key="hist_date_start")
+        date_end = col3.date_input("Дата по", value=max_date, key="hist_date_end")
+
+        df_view = df_kpi_history.copy()
+        if selected_hist_company != "Все компании":
+            df_view = df_view[df_view["company"].astype(str) == selected_hist_company].copy()
+        if "report_date" in df_view.columns:
+            df_view = df_view[(df_view["report_date"] >= date_start) & (df_view["report_date"] <= date_end)].copy()
+
+        st.write(f"Строк в истории: {len(df_view)}")
+
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Компаний", len(df_view["company"].dropna().unique()) if "company" in df_view.columns else 0)
+        metric_cols[1].metric("OK", int((df_view["status"].astype(str) == "OK").sum()) if "status" in df_view.columns else 0)
+        metric_cols[2].metric("ALERT", int((df_view["status"].astype(str) == "ALERT").sum()) if "status" in df_view.columns else 0)
+        metric_cols[3].metric("ERROR", int((df_view["status"].astype(str) == "ERROR").sum()) if "status" in df_view.columns else 0)
+
+        if not df_view.empty:
+            display_columns = [c for c in [
+                "datetime_send","report_date","company","sales_qty","profit","profitability",
+                "ads","storage","stocks_fbo_rub","missing_cost_count","send_type","status",
+                "recipient_count","error_text"
+            ] if c in df_view.columns]
+            st.dataframe(df_view[display_columns].sort_values(["report_date", "company"], ascending=[False, True]), use_container_width=True, height=520)
+
+            hist_excel = to_excel(df_view[display_columns], sheet_name="KPI_History")
+            st.download_button(
+                label="📥 Скачать историю KPI",
+                data=hist_excel,
+                file_name=f"KPI_History_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                key="dl_kpi_history"
+            )
+        else:
+            st.warning("По выбранным фильтрам данных нет.")
+
+elif choice == "📥 Загрузить Прайс":
     st.title("📥 Загрузка прайс-листа")
     st.info(f"Файл будет сохранен по пути: {PRICE_SAVE_PATH}")
 
@@ -2432,7 +2591,7 @@ else:
         st.write(f"Дата отчета: {yesterday_report_date.strftime('%d.%m.%Y')}")
         if st.button("Отправить KPI по всем компаниям", key="btn_send_daily_kpi_all"):
             with st.spinner("Отправляем KPI по всем компаниям..."):
-                send_result = send_daily_kpi_for_all_companies(companies_df, yesterday_report_date)
+                send_result = send_daily_kpi_for_all_companies(companies_df, yesterday_report_date, send_type="manual")
                 st.session_state["daily_kpi_send_result"] = send_result
 
     with st.sidebar.expander("🧪 Проверка себестоимости", expanded=False):
