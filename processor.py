@@ -355,7 +355,7 @@ def create_analysis_report(
     - берём сумму из колонки "penalty" (или похожей)
 
     Платная приемка:
-    - если тип операции (iloc[:,24]) содержит "Обработка товара"
+    - если тип операции (iloc[:,24]) содержит "прием"
     - берём сумму из колонки "deduction" (или похожей)
     """
 
@@ -656,18 +656,18 @@ def create_analysis_report(
             .to_dict()
         )
 
-    # --- Платная приемка: сумма deduction по категории, где операция содержит "прием" ---
+    # --- Платная приемка: сумма acceptance по категории, где операция = "Обработка товара" ---
     acceptance_by_cat = {}
-    deduction_col = _pick_column_by_exact_or_contains(
+    acceptance_col = _pick_column_by_exact_or_contains(
         df_fin,
-        exact="deduction",
-        contains_any=["deduction", "удерж", "вычет"]
+        exact="acceptance",
+        contains_any=["acceptance", "обработка товара"]
     )
-    if deduction_col:
-        df_fin["_deduction_val"] = pd.to_numeric(df_fin[deduction_col], errors="coerce").fillna(0.0)
+    if acceptance_col:
+        df_fin["_acceptance_val"] = pd.to_numeric(df_fin[acceptance_col], errors="coerce").fillna(0.0)
         acceptance_by_cat = (
-            df_fin[df_fin["_op"].str.contains("прием", case=False, na=False)]
-            .groupby("_cat")["_deduction_val"].sum()
+            df_fin[df_fin["_op"].astype(str).str.strip().str.lower() == "обработка товара".lower()]
+            .groupby("_cat")["_acceptance_val"].sum()
             .to_dict()
         )
 
