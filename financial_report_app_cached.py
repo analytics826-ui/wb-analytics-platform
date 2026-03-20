@@ -1681,6 +1681,7 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
         "Период",
         "Категория",
         "Продаж штук",
+        "Цена продажи",
         "Себестоимость",
         "Прибыль",
         "Рентабельность",
@@ -1700,6 +1701,7 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
 
     numeric_columns = [
         "Продаж штук",
+        "Цена продажи",
         "Себестоимость",
         "Прибыль",
         "Рентабельность",
@@ -3224,6 +3226,7 @@ else:
                     metric_row = None
                     if not df_summary_view.empty:
                         sales_total = pd.to_numeric(df_summary_view.get("Продаж штук", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+                        sale_price_total = pd.to_numeric(df_summary_view.get("Цена продажи", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         profit_total = pd.to_numeric(df_summary_view.get("Прибыль", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         cost_total = pd.to_numeric(df_summary_view.get("Себестоимость", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
                         ads_total = pd.to_numeric(df_summary_view.get("Реклама", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
@@ -3232,6 +3235,7 @@ else:
                         profitability_total = round((profit_total / cost_total) * 100, 1) if cost_total != 0 else 0.0
                         metric_row = {
                             "Продаж штук": sales_total,
+                            "Цена продажи": sale_price_total,
                             "Прибыль": profit_total,
                             "Себестоимость": cost_total,
                             "Реклама": ads_total,
@@ -3241,23 +3245,27 @@ else:
                         }
 
                     if metric_row is not None:
-                        col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6, col_kpi_7 = st.columns(7)
+                        col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6, col_kpi_7, col_kpi_8 = st.columns(8)
                         with col_kpi_1:
                             st.metric("Продаж штук", format_metric_int(metric_row.get("Продаж штук", 0)))
                         with col_kpi_2:
-                            st.metric("Прибыль", format_metric_money(metric_row.get("Прибыль", 0), decimals=2))
+                            st.metric("Цена продажи", format_metric_money(metric_row.get("Цена продажи", 0), decimals=2))
                         with col_kpi_3:
-                            st.metric("Себестоимость", format_metric_money(metric_row.get("Себестоимость", 0), decimals=2))
+                            st.metric("Прибыль", format_metric_money(metric_row.get("Прибыль", 0), decimals=2))
                         with col_kpi_4:
-                            st.metric("Реклама", format_metric_money(metric_row.get("Реклама", 0), decimals=2))
+                            st.metric("Себестоимость", format_metric_money(metric_row.get("Себестоимость", 0), decimals=2))
                         with col_kpi_5:
-                            st.metric("Хранение", format_metric_money(metric_row.get("Хранение", 0), decimals=2))
+                            st.metric("Реклама", format_metric_money(metric_row.get("Реклама", 0), decimals=2))
                         with col_kpi_6:
-                            st.metric("Рентабельность", format_metric_percent(metric_row.get("Рентабельность", 0), decimals=1))
+                            st.metric("Хранение", format_metric_money(metric_row.get("Хранение", 0), decimals=2))
                         with col_kpi_7:
+                            st.metric("Рентабельность", format_metric_percent(metric_row.get("Рентабельность", 0), decimals=1))
+                        with col_kpi_8:
                             st.metric("Остаток FBO, ₽", format_metric_money(metric_row.get("Остаток FBO, рублей", 0), decimals=2))
 
                     format_map_main = {}
+                    if "Цена продажи" in df_summary_view.columns:
+                        format_map_main["Цена продажи"] = "{:.2f}"
                     if "Себестоимость" in df_summary_view.columns:
                         format_map_main["Себестоимость"] = "{:.2f}"
                     if "Прибыль" in df_summary_view.columns:
@@ -3291,6 +3299,8 @@ else:
                             ] * len(_row)
 
                         format_map_total = {}
+                        if "Цена продажи" in df_summary_total.columns:
+                            format_map_total["Цена продажи"] = "{:.2f}"
                         if "Себестоимость" in df_summary_total.columns:
                             format_map_total["Себестоимость"] = "{:.2f}"
                         if "Прибыль" in df_summary_total.columns:
