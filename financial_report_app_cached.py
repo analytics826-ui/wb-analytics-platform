@@ -1899,6 +1899,7 @@ def format_daily_kpi_message(company_name: str, report_date, kpi: dict) -> str:
         f"Дата отчета: {report_date_str}\n"
         f"Компания: {company_name}\n\n"
         f"Продаж, штук: {format_metric_int(kpi.get('Продаж штук', 0))}\n"
+        f"Цена продажи: {format_metric_money(kpi.get('Цена продажи', 0), 2)}\n"
         f"Прибыль: {format_metric_money(kpi.get('Прибыль', 0), 2)}\n"
         f"Рентабельность: {format_metric_percent(kpi.get('Рентабельность', 0), 1)}\n"
         f"Реклама: {format_metric_money(kpi.get('Реклама', 0), 2)}\n"
