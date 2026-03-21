@@ -1676,6 +1676,13 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
     if df_analysis is None or df_analysis.empty:
         return pd.DataFrame()
 
+    df = df_analysis.copy()
+
+    source_price_col = "Цена розничная с учетом\nсогласованной скидки"
+    target_price_col = "Цена продажи"
+    if target_price_col not in df.columns and source_price_col in df.columns:
+        df[target_price_col] = df[source_price_col]
+
     summary_columns = [
         "Кабинет",
         "Период",
@@ -1693,11 +1700,11 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
         "Остаток FBO, рублей",
     ]
 
-    available_columns = [col for col in summary_columns if col in df_analysis.columns]
+    available_columns = [col for col in summary_columns if col in df.columns]
     if not available_columns:
         return pd.DataFrame()
 
-    df = df_analysis[available_columns].copy()
+    df = df[available_columns].copy()
 
     numeric_columns = [
         "Продаж штук",
