@@ -1676,13 +1676,6 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
     if df_analysis is None or df_analysis.empty:
         return pd.DataFrame()
 
-    df = df_analysis.copy()
-
-    source_price_col = "Цена розничная с учетом\nсогласованной скидки"
-    target_price_col = "Цена продажи"
-    if target_price_col not in df.columns and source_price_col in df.columns:
-        df[target_price_col] = df[source_price_col]
-
     summary_columns = [
         "Кабинет",
         "Период",
@@ -1700,11 +1693,11 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
         "Остаток FBO, рублей",
     ]
 
-    available_columns = [col for col in summary_columns if col in df.columns]
+    available_columns = [col for col in summary_columns if col in df_analysis.columns]
     if not available_columns:
         return pd.DataFrame()
 
-    df = df[available_columns].copy()
+    df = df_analysis[available_columns].copy()
 
     numeric_columns = [
         "Продаж штук",
@@ -1734,9 +1727,12 @@ def build_sales_summary_report(df_analysis: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_total_kpi_from_summary(df_summary: pd.DataFrame) -> dict:
+    retail_price_col = "Цена розничная с учетом\nсогласованной скидки"
+
     if df_summary is None or df_summary.empty:
         return {
             "Продаж штук": 0,
+            "Цена продажи": 0.0,
             "Прибыль": 0.0,
             "Рентабельность": 0.0,
             "Реклама": 0.0,
@@ -1756,6 +1752,8 @@ def _build_total_kpi_from_summary(df_summary: pd.DataFrame) -> dict:
 
     numeric_columns = [
         "Продаж штук",
+        retail_price_col,
+        "Цена продажи",
         "Прибыль",
         "Себестоимость",
         "Реклама",
@@ -1768,6 +1766,7 @@ def _build_total_kpi_from_summary(df_summary: pd.DataFrame) -> dict:
 
     if total_row is not None:
         sales_qty = float(pd.to_numeric(total_row.get("Продаж штук", 0), errors="coerce"))
+        sale_price = float(pd.to_numeric(total_row.get(retail_price_col, total_row.get("Цена продажи", 0)), errors="coerce"))
         profit = float(pd.to_numeric(total_row.get("Прибыль", 0), errors="coerce"))
         cost = float(pd.to_numeric(total_row.get("Себестоимость", 0), errors="coerce"))
         ads = float(pd.to_numeric(total_row.get("Реклама", 0), errors="coerce"))
@@ -1777,6 +1776,10 @@ def _build_total_kpi_from_summary(df_summary: pd.DataFrame) -> dict:
         if "Категория" in df.columns:
             df = df[df["Категория"].astype(str).str.strip() != "Итого"].copy()
         sales_qty = float(df["Продаж штук"].sum()) if "Продаж штук" in df.columns else 0.0
+        if retail_price_col in df.columns:
+            sale_price = float(df[retail_price_col].sum())
+        else:
+            sale_price = float(df["Цена продажи"].sum()) if "Цена продажи" in df.columns else 0.0
         profit = float(df["Прибыль"].sum()) if "Прибыль" in df.columns else 0.0
         cost = float(df["Себестоимость"].sum()) if "Себестоимость" in df.columns else 0.0
         ads = float(df["Реклама"].sum()) if "Реклама" in df.columns else 0.0
@@ -1787,6 +1790,7 @@ def _build_total_kpi_from_summary(df_summary: pd.DataFrame) -> dict:
 
     return {
         "Продаж штук": int(round(sales_qty)),
+        "Цена продажи": round(sale_price, 2),
         "Прибыль": round(profit, 2),
         "Рентабельность": profitability,
         "Реклама": round(ads, 2),
@@ -1888,11 +1892,13 @@ def format_metric_percent(value, decimals: int = 1) -> str:
 
 def format_daily_kpi_message(company_name: str, report_date, kpi: dict) -> str:
     report_date_str = report_date.strftime("%d.%m.%Y") if hasattr(report_date, "strftime") else str(report_date)
+    sale_price_value = kpi.get("Цена продажи", kpi.get("Цена розничная с учетом\nсогласованной скидки", 0))
     return (
         "📊 WB Analytics\n\n"
         f"Дата отчета: {report_date_str}\n"
         f"Компания: {company_name}\n\n"
         f"Продаж, штук: {format_metric_int(kpi.get('Продаж штук', 0))}\n"
+        f"Цена продажи: {format_metric_money(sale_price_value, 2)}\n"
         f"Прибыль: {format_metric_money(kpi.get('Прибыль', 0), 2)}\n"
         f"Рентабельность: {format_metric_percent(kpi.get('Рентабельность', 0), 1)}\n"
         f"Реклама: {format_metric_money(kpi.get('Реклама', 0), 2)}\n"
