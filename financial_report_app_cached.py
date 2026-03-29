@@ -62,7 +62,7 @@ def rename_kpi_history_columns_for_display(df: pd.DataFrame) -> pd.DataFrame:
 KPI_HISTORY_PATH = os.path.join(PRICE_SAVE_PATH, "kpi_history.parquet")
 
 # === НАСТРОЙКА АВТООБНОВЛЕНИЯ НОМЕНКЛАТУРЫ ===
-NOMENCLATURE_REFRESH_DAYS = 3
+NOMENCLATURE_REFRESH_DAYS = 1
 
 os.makedirs(RAW_JSON_DIR, exist_ok=True)
 os.makedirs(PRICE_SAVE_PATH, exist_ok=True)
